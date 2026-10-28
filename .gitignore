@@ -1,0 +1,36 @@
+# Private configuration and credentials
+.local/
+.storage/
+.env
+.env.*
+secrets.yaml
+speaker-config.json
+otp.txt
+.mi.token
+adbkey*
+
+# Local development and generated files
+work/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.log
+.codex-attachments/
+dist/
+build/
+
+# Device images and private backups
+*.img
+*.bin
+*.dump
+*.backup
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
