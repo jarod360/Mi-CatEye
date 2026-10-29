@@ -59,7 +59,7 @@ def main():
     staging = Path(tempfile.mkdtemp(prefix="mi-cateye-package-" + version + "-", dir=ROOT / "work"))
     component = staging / "custom_components/mi_cateye"
     shutil.copytree(ROOT / "custom_components/mi_cateye", component,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "bin"))
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "bin", "licenses"))
     binary_dir = component / "bin"
     binary_dir.mkdir()
     manifest = {}
