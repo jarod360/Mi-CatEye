@@ -1,6 +1,6 @@
 # Mi-CatEye
 
-Home Assistant 猫眼接入集成 · **候选发布版 0.1.0rc1**
+Home Assistant 猫眼接入集成 · **候选发布版 0.1.0rc2**
 
 面向已验证的 `loock.cateye.v02`：一条上游实时会话供电视、小爱屏幕和手机共享，同时提供门铃、经过、停留事件，以及云端事件录像回看。当前为个人非商业 Home Assistant 使用的候选版本，不是官方集成，不承诺兼容所有设备。
 
@@ -19,7 +19,7 @@ Home Assistant 猫眼接入集成 · **候选发布版 0.1.0rc1**
 
 已验证环境：Home Assistant Core 2026.10.4，Linux amd64；安装包亦含 arm64 媒体核心，但 arm64 尚未实机验证。需要 HA 自带 FFmpeg，云端访问正常，以及账号能够访问目标猫眼。
 
-1. 备份 HA。从[候选标签下载源码 ZIP](https://github.com/jarod360/Mi-CatEye/archive/refs/tags/v0.1.0rc1.zip)（已含媒体核心），解压后将其中的 `custom_components/mi_cateye` 文件夹复制到 HA 的 `/config/custom_components/mi_cateye`，确认里面存在 `manifest.json`。不要覆盖整个 `custom_components` 目录。
+1. 备份 HA。从[候选标签下载源码 ZIP](https://github.com/jarod360/Mi-CatEye/archive/refs/tags/v0.1.0rc2.zip)（已含媒体核心），解压后将其中的 `custom_components/mi_cateye` 文件夹复制到 HA 的 `/config/custom_components/mi_cateye`，确认里面存在 `manifest.json`。不要覆盖整个 `custom_components` 目录。
 2. 重启 HA，在「设置 → 设备与服务 → 添加集成」搜索 **Mi-CatEye**。
 3. 按向导完成账号视频鉴权及事件 OAuth 授权；验证码和短信验证码只填在 HA 配置页。事件 OAuth 回调使用上游注册的 `http://homeassistant.local:8123`，授权浏览器需能访问此地址。
 4. 配置电视和小爱接收器的局域网地址、手机通知服务；不用的端可以留空。
