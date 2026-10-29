@@ -1,0 +1,23 @@
+{
+  "domain": "mi_cateye",
+  "name": "Mi-CatEye",
+  "version": "0.1.0rc1",
+  "config_flow": true,
+  "single_config_entry": true,
+  "integration_type": "device",
+  "iot_class": "cloud_push",
+  "codeowners": [
+    "@jarod360"
+  ],
+  "documentation": "https://github.com/jarod360/Mi-CatEye",
+  "issue_tracker": "https://github.com/jarod360/Mi-CatEye/issues",
+  "dependencies": [
+    "http",
+    "frontend",
+    "ffmpeg",
+    "websocket_api"
+  ],
+  "requirements": [
+    "paho-mqtt==2.1.0"
+  ]
+}

@@ -1,0 +1,15 @@
+# 导航卡片，无需绑定旧摄像头。可按自己的主题调整样式。
+type: horizontal-stack
+cards:
+  - type: button
+    name: 实时视频
+    icon: mdi:video
+    tap_action:
+      action: navigate
+      navigation_path: /mi-cateye
+  - type: button
+    name: 录像回看
+    icon: mdi:play-box-multiple-outline
+    tap_action:
+      action: navigate
+      navigation_path: /mi-cateye-recordings

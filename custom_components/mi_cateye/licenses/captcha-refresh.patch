@@ -1,0 +1,52 @@
+diff --git a/internal/xiaomi/xiaomi.go b/internal/xiaomi/xiaomi.go
+index 1e57842..b19f1e5 100644
+--- a/internal/xiaomi/xiaomi.go
++++ b/internal/xiaomi/xiaomi.go
+@@ -311,6 +311,12 @@ func apiAuth(w http.ResponseWriter, r *http.Request) {
+ 	var err error
+ 
+ 	switch {
++	case r.Form.Get("refresh_captcha") == "true":
++		if auth == nil {
++			http.Error(w, "no login in progress", http.StatusBadRequest)
++			return
++		}
++		err = auth.RefreshCaptcha()
+ 	case username != "" || password != "":
+ 		auth = xiaomi.NewCloud(AppXiaomiHome)
+ 		err = auth.Login(username, password)
+diff --git a/pkg/xiaomi/cloud.go b/pkg/xiaomi/cloud.go
+index 0dcfd24..10fcf6a 100644
+--- a/pkg/xiaomi/cloud.go
++++ b/pkg/xiaomi/cloud.go
+@@ -33,6 +33,7 @@ type Cloud struct {
+ 	passToken string
+ 
+ 	auth map[string]string
++	captchaURL string
+ }
+ 
+ func NewCloud(sid string) *Cloud {
+@@ -174,6 +175,7 @@ func (c *Cloud) LoginWithVerify(ticket string) error {
+ }
+ 
+ func (c *Cloud) getCaptcha(captchaURL string) error {
++	c.captchaURL = captchaURL
+ 	res, err := c.client.Get("https://account.xiaomi.com" + captchaURL)
+ 	if err != nil {
+ 		return err
+@@ -192,6 +194,14 @@ func (c *Cloud) getCaptcha(captchaURL string) error {
+ 	}
+ }
+ 
++// RefreshCaptcha retrieves a fresh challenge without submitting a guessed code.
++func (c *Cloud) RefreshCaptcha() error {
++	if c.auth == nil || c.captchaURL == "" {
++		return errors.New("xiaomi: no captcha challenge")
++	}
++	return c.getCaptcha(c.captchaURL)
++}
++
+ func (c *Cloud) authStart(notificationURL string) error {
+ 	rawURL := strings.Replace(notificationURL, "/fe/service/identity/authStart", "/identity/list", 1)
+ 	res, err := c.client.Get(rawURL)

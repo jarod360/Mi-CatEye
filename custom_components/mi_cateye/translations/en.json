@@ -1,0 +1,80 @@
+{
+  "title": "Mi-CatEye",
+  "config": {
+    "step": {
+      "user": {
+        "title": "添加猫眼",
+        "description": "使用米家账号取得视频授权；随后确认设备事件授权。两类凭据由本集成分别管理，目前不承诺一次 OAuth 同时授权两类接口。",
+        "data": {
+          "account": "小米账号",
+          "password": "密码",
+          "region": "账号地区",
+          "ha_url": "Home Assistant 访问地址"
+        }
+      },
+      "verify": {
+        "title": "小米安全验证",
+        "description": "输入刚收到的短信或邮件验证码。",
+        "data": {
+          "code": "验证码"
+        }
+      },
+      "captcha": {
+        "title": "图形验证码",
+        "description": "![图形验证码]({captcha_url})\n\n填写图片中的字符。需要换一张时勾选下方选项并提交，无需填写验证码。",
+        "data": {
+          "code": "图形验证码",
+          "refresh_captcha": "换一张验证码"
+        }
+      },
+      "device": {
+        "title": "选择猫眼",
+        "description": "只列出支持的 loock.cateye.v02 猫眼，不导入账号里的其它设备。",
+        "data": {
+          "doorbell": "猫眼"
+        }
+      },
+      "oauth": {
+        "title": "授权门铃事件与状态",
+        "description": "[打开小米授权页面]({authorization_url})。授权成功后回到这里，点击下一步。请使用能访问所选猫眼的账号。",
+        "data": {}
+      }
+    },
+    "error": {
+      "invalid_ha_url": "请填写有效的 Home Assistant 根地址，不包含账号、路径或查询参数。",
+      "video_login_failed": "视频授权未完成，请确认账号、密码和网络后重试。",
+      "verification_failed": "验证码未通过，请确认后重试。",
+      "authorization_pending": "尚未收到设备授权，请先完成授权页面。",
+      "invalid_receiver_address": "请填写接收设备的局域网 IPv4 地址。"
+    },
+    "abort": {
+      "setup_expired": "配置已过期，请重新开始。",
+      "backend_unavailable": "此安装包缺少对应平台的媒体核心，或校验失败，请使用包含媒体核心的发布包。",
+      "captcha_unavailable": "无法显示此验证码，请稍后重新登录。",
+      "device_list_unavailable": "暂时无法获取猫眼列表，请稍后重试。",
+      "no_supported_doorbell": "此账号下未找到支持的 loock.cateye.v02 猫眼。",
+      "already_configured": "这台猫眼已经添加。",
+      "reauth_successful": "设备授权已更新。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "视频与通知",
+        "description": "检测到旧版猫眼桥接仍在运行时，会保持只读观察，不开启第二路视频。切换前只停用旧猫眼条目和桥接，不要删除其它家居设备依赖的集成。",
+        "data": {
+          "enable_video": "启用视频",
+          "auto_notify": "按铃时自动通知",
+          "tv_host": "电视接收器地址（可留空）",
+          "xiaoai_host": "小爱接收器地址（可留空）",
+          "phone_service": "手机通知",
+          "phone_browser_id": "Phone foreground popup Browser Mod ID (optional)"
+        }
+      }
+    },
+    "error": {
+      "invalid_receiver_address": "请填写接收设备的局域网 IPv4 地址。",
+      "invalid_phone_browser": "Use letters, digits, underscores and hyphens in the Browser Mod ID."
+    }
+  }
+}

@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.patch -text -whitespace
+*.wav -text
+custom_components/mi_cateye/bin/** -text
+custom_components/mi_cateye/vendor/** -text -whitespace
+custom_components/mi_cateye/licenses/** -text -whitespace
+custom_components/mi_cateye/bin/manifest.json text eol=lf

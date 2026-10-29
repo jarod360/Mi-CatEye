@@ -1,0 +1,88 @@
+<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#10151d;color:white;font:14px system-ui}video{display:block;width:100%;height:100%;object-fit:contain;background:#10151d}p{position:absolute;left:0;right:0;bottom:0;margin:0;padding:8px 12px;color:#c9d4e6;background:#10151dcc}p:empty{display:none}</style>
+<video autoplay muted playsinline></video><p id="status">正在连接猫眼…</p>
+<script>
+const video=document.querySelector('video'),status=document.querySelector('#status');
+const endpoint=__SOCKET__,deadline=Date.now()+170000;
+let ws,source,buffer,queue=[],retry=0,timer,watch,last=0,stalled=0,closed=false,objectURL,generation=0;
+let frameCallback,frameCount=0,firstFrame,started=performance.now(),lastReport=0;
+function report(extra={}){
+  if(ws?.readyState!==WebSocket.OPEN)return;
+  const data={type:'stats',rendered_frames:frameCount,video_time_ms:Math.max(0,Math.round(video.currentTime*1000)),...extra};
+  if(firstFrame!==undefined)data.first_frame_ms=firstFrame;
+  ws.send(JSON.stringify(data));
+}
+function watchFrames(){
+  if(!video.requestVideoFrameCallback)return;
+  frameCallback=video.requestVideoFrameCallback(()=>{
+    frameCount++;
+    if(firstFrame===undefined){firstFrame=Math.round(performance.now()-started);status.textContent='';report();}
+    if(performance.now()-lastReport>5000){lastReport=performance.now();report();}
+    if(!closed)watchFrames();
+  });
+}
+function stop(){
+  generation++;clearTimeout(timer);clearInterval(watch);
+  if(frameCallback!==undefined&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(frameCallback);
+  if(ws){ws.onclose=null;ws.onmessage=null;ws.onerror=null;ws.close();ws=null;}
+  if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
+}
+function reconnect(){
+  if(closed)return;stop();
+  if(Date.now()>deadline||retry>=6){status.textContent='连接已结束，请关闭后重新打开';return;}
+  status.textContent='画面中断，正在重新连接…';timer=setTimeout(connect,Math.min(1000*++retry,5000));
+}
+function append(){
+  if(!buffer||buffer.updating)return;
+  try{
+    if(buffer.buffered.length&&buffer.buffered.end(0)-buffer.buffered.start(0)>20){buffer.remove(buffer.buffered.start(0),buffer.buffered.end(0)-8);return;}
+    if(queue.length)buffer.appendBuffer(queue.shift());
+  }catch(e){reconnect();}
+}
+function connect(){
+  if(closed||Date.now()>deadline)return;
+  queue=[];buffer=null;last=0;stalled=0;firstFrame=undefined;frameCount=0;started=performance.now();
+  if(!window.MediaSource){status.textContent='当前系统播放器不支持实时视频，请更新系统WebView';return;}
+  const mine=++generation;source=new MediaSource();objectURL=URL.createObjectURL(source);video.src=objectURL;
+  source.addEventListener('sourceopen',()=>{
+    if(mine!==generation||closed)return;
+    const u=new URL(endpoint,location.href);u.protocol=location.protocol==='https:'?'wss:':'ws:';
+    ws=new WebSocket(u);ws.binaryType='arraybuffer';
+    ws.onmessage=event=>{
+      if(mine!==generation||closed)return;
+      if(typeof event.data==='string'){
+        let msg;try{msg=JSON.parse(event.data);}catch(e){reconnect();return;}
+        if(msg.type==='error'){reconnect();return;}
+        if(msg.type==='mse'&&!buffer){
+          const supported=MediaSource.isTypeSupported(msg.value);report({codec_supported:supported});
+          if(!supported){status.textContent='当前系统WebView不支持此H.265视频，请更新后重试';stop();return;}
+          try{
+            buffer=source.addSourceBuffer(msg.value);buffer.mode='segments';
+            buffer.addEventListener('updateend',()=>{
+              if(mine!==generation)return;
+              if(buffer.buffered.length){const end=buffer.buffered.end(buffer.buffered.length-1);if(end-video.currentTime>4)video.currentTime=Math.max(0,end-1);}
+              append();
+            });
+            watchFrames();
+          }catch(e){status.textContent='视频解码器初始化失败，请关闭后重试';stop();}
+        }
+      }else{
+        queue.push(event.data);if(queue.length>120){reconnect();return;}append();video.play().catch(()=>{});
+      }
+    };
+    ws.onclose=reconnect;ws.onerror=()=>ws?.close();
+  },{once:true});
+  watch=setInterval(()=>{
+    if(video.currentTime>last+.05){last=video.currentTime;stalled=0;status.textContent='';}
+    else if(++stalled>(last>0?12:50)){reconnect();return;}
+    if(firstFrame!==undefined&&performance.now()-lastReport>5000){lastReport=performance.now();report();}
+  },1000);
+}
+// Monitor stalls every second without showing any debug counters in the product.
+addEventListener('pagehide',()=>{closed=true;stop();});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){closed=true;stop();}
+  else if(Date.now()<deadline){closed=false;connect();}
+});
+connect();
+</script>

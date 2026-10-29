@@ -1,0 +1,27 @@
+show_tv:
+  name: 电视显示门口视频
+  description: 原始 H.265 EXO 弹窗，约60秒关闭；不自动切换兼容接收器。
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: mi_cateye
+show_xiaoai:
+  name: 小爱显示门口视频
+  description: 全屏视频、来访语音及音量恢复保护。
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: mi_cateye
+notify_phone:
+  name: 手机门铃通知
+  description: 点击通知打开实时画面。
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: mi_cateye

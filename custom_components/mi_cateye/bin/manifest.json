@@ -1,0 +1,10 @@
+{
+  "amd64": {
+    "filename": "mi-cateye-media-linux-amd64-0.1.0rc1",
+    "sha256": "e5b533e2f9c9350aff637a38c384a682bbfda0fd8c9796c916199365d1c491d1"
+  },
+  "arm64": {
+    "filename": "mi-cateye-media-linux-arm64-0.1.0rc1",
+    "sha256": "2d09c3a7957a91abee2846e4754c2aef4126da162523741b869be358e049fecc"
+  }
+}

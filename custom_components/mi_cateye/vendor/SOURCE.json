@@ -1,0 +1,21 @@
+{
+  "source": "https://github.com/XiaoMi/ha_xiaomi_home",
+  "tag": "v0.5.0",
+  "commit": "75b3acb6325a3a8d295688b13904737d6738a6a5",
+  "status": "release_candidate",
+  "source_hashes": {
+    "common.py": "2d0c53fa5f4b874d242335ac2afc897920c15919d927340e9a60c90fdb3f1c25",
+    "const.py": "9bd4d9f34e0614965d521c5dbe01afda68c3697e94ef0631244a7c8822b6b801",
+    "miot_cloud.py": "6db33ee5f359bed3186c28c7ac08c3c78aed8bd49c073061c145ea582ce47084",
+    "miot_error.py": "9c2da1a0b9654a7008c2fe5ef266b9dd4ada4292ee796e46b5240991182c489e",
+    "miot_mips.py": "031a7327af538b60cc30ffa4cbb3f3c2d7d73df8be15e85199b860eaddae3073"
+  },
+  "output_hashes": {
+    "common.py": "de53a3b7822e604565a0671dbf5f372228fcfe73862e6ceb098ea392d94cdae6",
+    "const.py": "5f39b4a552e931c3053854589e99ec1a6d7f182fb7fdff7c0d36521a65bc6cf4",
+    "miot_cloud.py": "14dbcb70ea52884c41f2bc5d32fffbab47b4691f82305d2bc57dabc453073526",
+    "miot_error.py": "9c2da1a0b9654a7008c2fe5ef266b9dd4ada4292ee796e46b5240991182c489e",
+    "miot_mips.py": "235399c577040bc92be774ca7d3cd28048ab1eaf7ac12ac40cfd36ad888eb31b",
+    "__init__.py": "3dff78596d6ca38ba4d63e708f8a857bcca159727079bc2c6a6156490d392f4e"
+  }
+}

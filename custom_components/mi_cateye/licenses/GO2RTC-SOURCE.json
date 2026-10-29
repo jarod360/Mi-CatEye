@@ -1,0 +1,22 @@
+{
+  "source": "https://github.com/AlexxIT/go2rtc",
+  "tag": "v1.9.15",
+  "commit": "7c05066c90ab6ad1fccb506d5f0408aa31ebe60f",
+  "modules": [
+    "api",
+    "ws",
+    "streams",
+    "http",
+    "rtsp",
+    "mp4",
+    "mjpeg",
+    "ffmpeg",
+    "xiaomi"
+  ],
+  "status": "candidate_not_deployed",
+  "profile_features": [
+    "shared_live_video",
+    "cloud_event_recording_list",
+    "authenticated_recording_playback"
+  ]
+}

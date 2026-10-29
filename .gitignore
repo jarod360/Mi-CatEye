@@ -34,3 +34,8 @@ Thumbs.db
 .idea/
 .vscode/
 
+
+outputs/
+*.mp4
+*.tar
+*.zip
