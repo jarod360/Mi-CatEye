@@ -12,6 +12,18 @@ DOMAIN = "mi_cateye"
 ASSETS = Path(__file__).parent / "assets"
 
 
+def account_title(data, label=None):
+    """A display label only; never substitute a device name or credential."""
+    if isinstance(label, str) and label.strip():
+        value = label.strip()
+        if len(value) > 80 or any(ord(ch) < 32 for ch in value):
+            raise ValueError("invalid_account_label")
+        return value
+    identity = str(data.get("media_user_id", ""))
+    suffix = " · 尾号 " + identity[-4:] if identity.isascii() and identity.isdecimal() else ""
+    return "米家账号" + suffix
+
+
 def profile_directory(hass, uuid):
     if not isinstance(uuid, str) or not re.fullmatch(r"[a-f0-9]{32}", uuid):
         raise MediaError("invalid_profile_identity")

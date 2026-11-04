@@ -68,13 +68,27 @@
           "tv_host": "电视接收器地址（可留空）",
           "xiaoai_host": "小爱接收器地址（可留空）",
           "phone_service": "手机通知",
-          "phone_browser_id": "Phone foreground popup Browser Mod ID (optional)"
+          "phone_browser_id": "Phone foreground popup Browser Mod ID (optional)",
+          "configure_cameras": "Manage Xiaomi cameras",
+          "account_label": "Account display name (optional)"
+        }
+      },
+      "cameras": {
+        "title": "Xiaomi cameras",
+        "description": "Select cameras from this account. Streaming is on demand. Model/firmware support depends on the media protocol; untested models are experimental. Deselect to remove a camera. Doorbell notifications stay on the original doorbell.",
+        "data": {
+          "cameras": "Cameras"
         }
       }
     },
     "error": {
       "invalid_receiver_address": "请填写接收设备的局域网 IPv4 地址。",
-      "invalid_phone_browser": "Use letters, digits, underscores and hyphens in the Browser Mod ID."
+      "invalid_phone_browser": "Use letters, digits, underscores and hyphens in the Browser Mod ID.",
+      "invalid_camera_selection": "Select devices from the discovered camera list.",
+      "invalid_account_label": "Use at most 80 characters without control characters."
+    },
+    "abort": {
+      "camera_discovery_unavailable": "Enable video and check the Xiaomi account connection before trying again. Existing settings were preserved."
     }
   }
 }

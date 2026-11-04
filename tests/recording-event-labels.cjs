@@ -1,0 +1,10 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const src=fs.readFileSync('custom_components/mi_cateye/assets/recordings-panel.js','utf8');
+const sandbox={HTMLElement:class{},customElements:{get:()=>true},console};
+vm.runInNewContext(src+';globalThis.label = CatEyeRecordingsPanel.prototype.eventLabel;',sandbox);
+assert.equal(sandbox.label('pass;bell'),'有人经过并按门铃');
+assert.equal(sandbox.label('Pass；Bell'),'有人经过并按门铃');
+assert.equal(sandbox.label('Bell:Pass'),'有人经过并按门铃');
+assert.equal(sandbox.label('Pass:Stay'),'有人停留');
+assert.equal(sandbox.label('Bell'),'有人按门铃');
+console.log('PASS: recording event labels');

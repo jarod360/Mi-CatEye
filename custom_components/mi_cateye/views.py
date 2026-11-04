@@ -6,6 +6,7 @@ from contextlib import suppress
 from datetime import timedelta
 import json
 import time
+from urllib.parse import urlencode
 
 import aiohttp
 from aiohttp import web
@@ -23,6 +24,16 @@ def runtime_for(hass):
     return runtime
 
 
+def requested_source(runtime, request, codec="h265"):
+    device = request.query.get("device")
+    if device is None:
+        return "doorbell_live" if codec == "h265" else "doorbell_compatible"
+    try:
+        return runtime.source_for(device, codec)
+    except MediaError:
+        raise web.HTTPNotFound(text="摄像机未添加") from None
+
+
 class RawView(HomeAssistantView):
     url = "/api/mi_cateye/raw.mp4"
     name = "api:mi_cateye:raw"
@@ -36,16 +47,16 @@ class RawView(HomeAssistantView):
         codec = request.query.get("codec", "h265")
         if codec not in {"h265", "h264"}:
             raise web.HTTPBadRequest()
+        source = requested_source(runtime, request, codec)
         try:
             await runtime.ensure_video()
         except MediaError:
             raise web.HTTPConflict(text="视频尚未启用，请先完成原有猫眼接入的切换") from None
-        source = "doorbell_live" if codec == "h265" else "doorbell_compatible"
         upstream = None
         output = web.StreamResponse(headers={"Content-Type": "video/mp4", "Cache-Control": "no-store"})
         try:
             async with asyncio.timeout(180):
-                if codec == "h265" and request.remote == runtime.entry.options.get("tv_host") and runtime.raw_prime is not None:
+                if source == "doorbell_live" and request.remote == runtime.entry.options.get("tv_host") and runtime.raw_prime is not None:
                     task, runtime.raw_prime = runtime.raw_prime, None
                     if runtime.raw_expiry is not None:
                         runtime.raw_expiry.cancel()
@@ -89,6 +100,7 @@ class MseView(HomeAssistantView):
 
     async def get(self, request):
         runtime = runtime_for(self.hass)
+        source = requested_source(runtime, request)
         try:
             await runtime.ensure_video()
         except MediaError:
@@ -98,9 +110,10 @@ class MseView(HomeAssistantView):
         tasks = []
         try:
             async with asyncio.timeout(180):
-                async with runtime.client.ws_connect(runtime.media.base_url + "/api/ws?src=doorbell_live",
+                async with runtime.client.ws_connect(runtime.media.base_url + "/api/ws?" + urlencode({"src": source}),
                                                       heartbeat=15, max_msg_size=16 * 1024 * 1024) as upstream:
-                    await upstream.send_json({"type": "mse", "value": "hvc1.1.6.L153.B0"})
+                    codecs = "hvc1.1.6.L153.B0" if source == "doorbell_live" else "avc1.640029,hvc1.1.6.L153.B0"
+                    await upstream.send_json({"type": "mse", "value": codecs})
 
                     async def relay():
                         async for message in upstream:
@@ -122,7 +135,8 @@ class MseView(HomeAssistantView):
                                 value = json.loads(message.data)
                                 first = value.get("first_frame_ms")
                                 if value.get("type") == "stats" and type(first) is int and 0 <= first <= 180000:
-                                    runtime.data["phone_first_frame_ms"] = first
+                                    if source == "doorbell_live":
+                                        runtime.data["phone_first_frame_ms"] = first
                             # Never forward client messages to go2rtc.
 
                     tasks = [asyncio.create_task(relay()), asyncio.create_task(watch_client())]
@@ -148,8 +162,12 @@ class PlayerView(HomeAssistantView):
         self.hass, self.template = hass, template
 
     async def get(self, request):
-        runtime_for(self.hass)
-        signed = async_sign_path(self.hass, "/api/mi_cateye/mse", timedelta(minutes=3), use_content_user=True)
+        runtime = runtime_for(self.hass)
+        requested_source(runtime, request)
+        path = "/api/mi_cateye/mse"
+        if "device" in request.query:
+            path += "?" + urlencode({"device": request.query["device"]})
+        signed = async_sign_path(self.hass, path, timedelta(minutes=3), use_content_user=True)
         return web.Response(text=self.template.replace("__SOCKET__", json.dumps(signed)), content_type="text/html",
                             headers={"Cache-Control": "no-store"})
 

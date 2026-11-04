@@ -26,7 +26,10 @@ def unused_loopback_port() -> int:
         return sock.getsockname()[1]
 
 
-def stream_configuration(user_id: str, region: str, did: str, host: str) -> dict:
+def stream_configuration(user_id: str, region: str, did: str, host: str, *, model="loock.cateye.v02") -> dict:
+    from .devices import is_camera_model
+    if not is_camera_model(model):
+        raise MediaError("invalid_camera_model")
     if not user_id.isascii() or not did.isascii() or not user_id.isdecimal() or not did.isdecimal():
         raise MediaError("invalid_device_identity")
     if region not in {"cn", "de", "i2", "ru", "sg", "us"}:
@@ -38,7 +41,7 @@ def stream_configuration(user_id: str, region: str, did: str, host: str) -> dict
     private_networks = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
     if address.version != 4 or not any(address in ipaddress.ip_network(network) for network in private_networks):
         raise MediaError("camera_requires_private_ipv4")
-    source = f"xiaomi://{user_id}:{region}@{address}?" + urlencode({"did": did, "model": "loock.cateye.v02"})
+    source = f"xiaomi://{user_id}:{region}@{address}?" + urlencode({"did": did, "model": model})
     return {
         "doorbell_live": source,
         "doorbell_compatible": "ffmpeg:doorbell_live#video=h264#audio=opus",
@@ -173,8 +176,9 @@ class MediaRuntime:
             raise MediaError("video_login_unavailable") from None
         raise MediaError("video_login_failed")
 
-    async def camera_choices(self, region):
-        """Return only the supported cat-eye model, never arbitrary streams."""
+    async def camera_choices(self, region, *, include_cameras=False):
+        """Discover metadata only; never start device playback or return tokens."""
+        from .devices import is_camera_model
         from urllib.parse import urlsplit, parse_qs
         try:
             async with self.session.get(self.base_url + "/api/xiaomi", timeout=aiohttp.ClientTimeout(total=10)) as response:
@@ -194,13 +198,19 @@ class MediaRuntime:
                     continue
                 url = urlsplit(item["url"])
                 query = parse_qs(url.query)
-                if query.get("model") != ["loock.cateye.v02"] or url.username != user:
+                model = query.get("model", [""])[0]
+                if url.scheme != "xiaomi" or url.username != user or not is_camera_model(model):
+                    continue
+                if not include_cameras and model != "loock.cateye.v02":
                     continue
                 did = query.get("did", [""])[0]
                 host = url.hostname or ""
-                stream_configuration(user, region, did, host)
+                try:
+                    stream_configuration(user, region, did, host, model=model)
+                except (MediaError, TypeError, ValueError):
+                    continue
                 choices[did] = {"did": did, "camera_host": host, "media_user_id": user,
-                                "name": str(item.get("name") or "猫眼")[:80]}
+                                "name": str(item.get("name") or model)[:80], "model": model}
             return choices
         except MediaError:
             raise

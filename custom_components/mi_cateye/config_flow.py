@@ -26,7 +26,7 @@ from homeassistant.helpers.network import get_url
 from homeassistant.helpers.system_info import async_get_system_info
 from homeassistant.setup import async_setup_component
 
-from .helpers import DOMAIN, make_media
+from .helpers import DOMAIN, make_media, account_title
 from .media import MediaError
 from .receivers import receiver_host
 from .session import CLIENT_ID, MODEL, OAuthState
@@ -269,7 +269,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.hass.config_entries.async_update_entry(self._reauth_entry, data=self._data)
             await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
             return self.async_abort(reason="reauth_successful")
-        return self.async_create_entry(title=self._data["name"], data=self._data)
+        return self.async_create_entry(title=account_title(self._data), data=self._data)
 
     async def _cleanup(self):
         if self._cleaned:
@@ -303,6 +303,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlow(config_entries.OptionsFlow):
+    def _finish_options(self, values):
+        label = account_title(self.config_entry.data, values.get("account_label"))
+        self.hass.config_entries.async_update_entry(self.config_entry, title=label)
+        return self.async_create_entry(title="", data=values)
+
     async def async_step_init(self, user_input=None):
         errors = {}
         if user_input:
@@ -313,18 +318,66 @@ class OptionsFlow(config_entries.OptionsFlow):
                 browser = user_input.get("phone_browser_id", "")
                 if browser and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", browser):
                     raise ValueError("invalid_phone_browser")
-                return self.async_create_entry(title="", data=user_input)
+                values = dict(user_input)
+                values.setdefault("account_label", self.config_entry.options.get("account_label", ""))
+                account_title(self.config_entry.data, values["account_label"])
+                manage = values.pop("configure_cameras", False)
+                values["cameras"] = self.config_entry.options.get("cameras", [])
+                if manage:
+                    self._camera_options = values
+                    return await self.async_step_cameras()
+                return self._finish_options(values)
             except ValueError as err:
-                errors["base"] = "invalid_phone_browser" if str(err) == "invalid_phone_browser" else "invalid_receiver_address"
+                errors["base"] = str(err) if str(err) in {"invalid_phone_browser", "invalid_account_label"} else "invalid_receiver_address"
         current = self.config_entry.options
         services = self.hass.services.async_services().get("notify", {})
         phones = {"": "不推送到手机", **{key: key.removeprefix("mobile_app_").replace("_", " ")
                                          for key in services if key.startswith("mobile_app_")}}
         return self.async_show_form(step_id="init", data_schema=vol.Schema({
+            vol.Optional("account_label", default=current.get("account_label", "")): str,
             vol.Optional("enable_video", default=current.get("enable_video", True)): bool,
             vol.Optional("auto_notify", default=current.get("auto_notify", True)): bool,
             vol.Optional("tv_host", default=current.get("tv_host", "")): str,
             vol.Optional("xiaoai_host", default=current.get("xiaoai_host", "")): str,
             vol.Optional("phone_browser_id", default=current.get("phone_browser_id", "")): str,
             vol.Optional("phone_service", default=current.get("phone_service", "") if current.get("phone_service", "") in phones else ""): vol.In(phones),
+            vol.Optional("configure_cameras", default=False): bool,
         }), errors=errors)
+
+    async def async_step_cameras(self, user_input=None):
+        from .devices import selected_cameras
+        errors = {}
+        if not hasattr(self, "_camera_options"):
+            return self.async_abort(reason="setup_expired")
+        if not hasattr(self, "_camera_choices"):
+            runtime = self.hass.data.get(DOMAIN, {}).get("runtime")
+            if runtime is None or runtime.closed or not runtime.video_enabled:
+                return self.async_abort(reason="camera_discovery_unavailable")
+            try:
+                self._camera_choices = await runtime.media.camera_choices(self.config_entry.data["region"], include_cameras=True)
+                self._camera_choices = {did: row for did, row in self._camera_choices.items()
+                    if did != self.config_entry.data["did"] and row["media_user_id"] == self.config_entry.data["media_user_id"]}
+                # Keep configured devices selectable when temporarily absent from discovery.
+                for did, row in selected_cameras(self.config_entry.data, self.config_entry.options).items():
+                    self._camera_choices.setdefault(did, row)
+            except MediaError:
+                return self.async_abort(reason="camera_discovery_unavailable")
+        choices = self._camera_choices
+        selected = [row["did"] for row in self.config_entry.options.get("cameras", [])]
+        if user_input is not None:
+            selected = user_input.get("cameras", [])
+            if not isinstance(selected, list) or len(selected) > 32 or len(set(selected)) != len(selected) or any(did not in choices for did in selected):
+                errors["base"] = "invalid_camera_selection"
+                selected = []
+            else:
+                values = {**self._camera_options, "cameras": [choices[did] for did in selected]}
+                try:
+                    selected_cameras(self.config_entry.data, values)
+                except MediaError:
+                    errors["base"] = "invalid_camera_selection"
+                else:
+                    return self._finish_options(values)
+        return self.async_show_form(step_id="cameras", data_schema=vol.Schema({
+            vol.Optional("cameras", default=selected): selector.SelectSelector(selector.SelectSelectorConfig(
+                options=[selector.SelectOptionDict(value=did, label=f"{row['name']} · {row['model']} · {did[-4:]}") for did, row in choices.items()],
+                multiple=True, mode=selector.SelectSelectorMode.LIST))}), errors=errors)

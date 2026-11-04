@@ -2,7 +2,7 @@
   "source": "https://github.com/XiaoMi/ha_xiaomi_home",
   "tag": "v0.5.0",
   "commit": "75b3acb6325a3a8d295688b13904737d6738a6a5",
-  "status": "release_candidate",
+  "status": "beta",
   "source_hashes": {
     "common.py": "2d0c53fa5f4b874d242335ac2afc897920c15919d927340e9a60c90fdb3f1c25",
     "const.py": "9bd4d9f34e0614965d521c5dbe01afda68c3697e94ef0631244a7c8822b6b801",

@@ -68,13 +68,27 @@
           "tv_host": "电视接收器地址（可留空）",
           "xiaoai_host": "小爱接收器地址（可留空）",
           "phone_service": "手机通知",
-          "phone_browser_id": "手机前台弹窗 Browser Mod ID（可留空）"
+          "phone_browser_id": "手机前台弹窗 Browser Mod ID（可留空）",
+          "configure_cameras": "添加或管理米家摄像机",
+          "account_label": "账号显示名称（可留空）"
+        }
+      },
+      "cameras": {
+        "title": "选择米家摄像机",
+        "description": "选择同账号的摄像机，按需取流，不自动加入门铃通知。支持程度取决于型号、固件和底层协议，未实测型号为实验支持；取消勾选可移除摄像机。",
+        "data": {
+          "cameras": "摄像机"
         }
       }
     },
     "error": {
       "invalid_receiver_address": "请填写接收设备的局域网 IPv4 地址。",
-      "invalid_phone_browser": "Browser Mod ID 只能包含字母、数字、下划线和连字符。"
+      "invalid_phone_browser": "Browser Mod ID 只能包含字母、数字、下划线和连字符。",
+      "invalid_camera_selection": "请选择列表内的摄像机，最多32台且不能重复。",
+      "invalid_account_label": "账号显示名称最多80个字符，不能包含控制字符。"
+    },
+    "abort": {
+      "camera_discovery_unavailable": "暂时无法获取摄像机列表，请确认视频已启用、米家账号连接正常后重试。原配置已保留。"
     }
   }
 }

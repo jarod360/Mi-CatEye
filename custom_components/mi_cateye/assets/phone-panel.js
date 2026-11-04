@@ -26,7 +26,11 @@ class DoorbellPhonePanel extends HTMLElement {
     const status=this.shadowRoot.querySelector('#status'),footer=this.shadowRoot.querySelector('footer');
     footer.hidden=true;status.textContent='正在连接…';
     try{
-      const result=await this._hass.callWS({type:'auth/sign_path',path:'/api/mi_cateye/player',expires:300});
+      const device=new URLSearchParams(window.location.search).get('device');
+      if(device&&!/^[0-9]{1,24}$/.test(device))throw new Error('Invalid device');
+      if(device)this.shadowRoot.querySelector('h2').textContent='摄像机实时画面';
+      const path='/api/mi_cateye/player'+(device?'?device='+encodeURIComponent(device):'');
+      const result=await this._hass.callWS({type:'auth/sign_path',path,expires:300});
       if(mine!==this.sequence||!this.isConnected)return;
       this.shadowRoot.querySelector('iframe').src=result.path;status.textContent='';
     }catch(e){if(mine===this.sequence){status.textContent='暂时无法打开视频，请重试';footer.hidden=false;this.started=false;}}

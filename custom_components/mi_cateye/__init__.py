@@ -25,7 +25,7 @@ async def async_setup(hass, config):
     frontend.async_register_built_in_panel(
         hass, component_name="custom", frontend_url_path="mi-cateye-recordings", show_in_sidebar=False,
         config={"_panel_custom": {"name": "mi-cateye-recordings-panel",
-                                 "module_url": "/api/mi_cateye/recordings-panel.js?v=008",
+                                 "module_url": "/api/mi_cateye/recordings-panel.js?v=009",
                                  "embed_iframe": False, "trust_external": False}},
     )
     register_recording_commands(hass)
@@ -54,7 +54,7 @@ async def async_setup_entry(hass, entry):
     from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
     from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
     from homeassistant.helpers.aiohttp_client import async_get_clientsession
-    from .helpers import make_media
+    from .helpers import make_media, account_title
     from .runtime import Runtime
     from .media import MediaError
     from .session import SessionError
@@ -63,6 +63,8 @@ async def async_setup_entry(hass, entry):
     if previous is not None and not previous.closed:
         raise ConfigEntryNotReady("已有门铃实例正在运行")
     runtime = None
+    if entry.title == entry.data.get("name"):
+        hass.config_entries.async_update_entry(entry, title=account_title(entry.data, entry.options.get("account_label")))
     try:
         client = async_get_clientsession(hass)
         media = await make_media(hass, entry.data["uuid"], client)

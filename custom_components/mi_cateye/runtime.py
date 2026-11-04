@@ -6,6 +6,7 @@ from contextlib import suppress
 
 from .media import stream_configuration, MediaError
 from .session import DoorbellSession
+from .devices import selected_cameras, source_for, media_streams
 
 
 class Runtime:
@@ -17,6 +18,7 @@ class Runtime:
         self.xiaoai_lock = asyncio.Lock()
         self.raw_prime = self.raw_expiry = None
         self.closed = False
+        self.cameras = selected_cameras(entry.data, entry.options)
         # The legacy bridge still owns video until a deliberate migration.
         self.video_enabled = not bool(hass.data.get("doorbell_local")) and entry.options.get("enable_video", True)
         self.cloud = DoorbellSession(
@@ -51,8 +53,7 @@ class Runtime:
     async def start(self):
         if self.video_enabled:
             tokens = await self.media.read_tokens()
-            streams = stream_configuration(self.entry.data["media_user_id"], self.entry.data["region"],
-                                            self.entry.data["did"], self.entry.data["camera_host"])
+            streams = media_streams(self.entry.data, self.cameras)
             await self.media.start(streams, tokens)
         await self.cloud.start()
 
@@ -61,10 +62,12 @@ class Runtime:
             raise MediaError("video_migration_not_enabled")
         if self.media.process is None or self.media.process.returncode is not None:
             await self.media.start(
-                stream_configuration(self.entry.data["media_user_id"], self.entry.data["region"],
-                                     self.entry.data["did"], self.entry.data["camera_host"]),
+                media_streams(self.entry.data, self.cameras),
                 await self.media.read_tokens(),
             )
+
+    def source_for(self, device=None, codec="h265"):
+        return source_for(self.entry.data, self.cameras, device, codec)
 
     def cancel_prime(self):
         if self.raw_expiry is not None:

@@ -11,7 +11,7 @@ class DoorbellEntity(Entity):
         self._attr_unique_id = f"{runtime.entry.data['did']}_{key}"
         device = runtime.data.get("device", {})
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, runtime.entry.data["did"])}, name=runtime.entry.title,
+            identifiers={(DOMAIN, runtime.entry.data["did"])}, name=runtime.entry.data.get("name", runtime.entry.title),
             manufacturer="Loock", model="loock.cateye.v02", sw_version=device.get("fw_version"),
         )
 
