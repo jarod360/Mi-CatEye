@@ -67,6 +67,7 @@ func main() {
 	ffmpeg.Init()
 	xiaomi.Init()
 	xiaomi.InitRecordings()
+	xiaomi.InitTalk()
 	if runtime.GOOS == "linux" {
 		parent := os.Getppid()
 		go func() {

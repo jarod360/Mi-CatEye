@@ -12,14 +12,15 @@ async def async_setup(hass, config):
     from .helpers import ASSETS
     from .views import RawView, MseView, PlayerView, PanelScriptView, VoiceView, CaptchaView
     from .recordings import RecordingView, RecordingsScriptView, register_recording_commands
+    from .talk import TalkView
     template = await hass.async_add_executor_job(lambda: (ASSETS / "player.html").read_text(encoding="utf-8"))
     for view in (RawView(hass), MseView(hass), PlayerView(hass, template), PanelScriptView(), VoiceView(), CaptchaView(hass),
-                 RecordingView(hass), RecordingsScriptView()):
+                 RecordingView(hass), RecordingsScriptView(), TalkView(hass)):
         hass.http.register_view(view)
     frontend.async_register_built_in_panel(
         hass, component_name="custom", frontend_url_path="mi-cateye", show_in_sidebar=False,
         config={"_panel_custom": {"name": "mi-cateye-phone-panel",
-                                 "module_url": "/api/mi_cateye/phone-panel.js?v=001",
+                                 "module_url": "/api/mi_cateye/phone-panel.js?v=003",
                                  "embed_iframe": False, "trust_external": False}},
     )
     frontend.async_register_built_in_panel(

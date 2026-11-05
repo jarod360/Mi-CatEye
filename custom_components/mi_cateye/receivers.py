@@ -28,6 +28,26 @@ def signed_url(runtime, path, seconds=120):
     )
 
 
+def talk_controls(runtime):
+    return {"talkEndpoint": signed_url(runtime, "/api/mi_cateye/talk?action=authorize", 180),
+            "buttonSize": 17,
+            "buttons": [{"id": "doorbell-talk", "label": "通话", "dismissOnClick": False},
+                        {"id": "doorbell-reply", "label": "语音回复", "dismissOnClick": False}]}
+
+
+async def supports_talk(runtime, endpoint):
+    for attempt in range(2):
+        try:
+            async with runtime.client.get(endpoint + "/state", timeout=aiohttp.ClientTimeout(total=3)) as response:
+                response.raise_for_status()
+                value = await response.json()
+                return isinstance(value, dict) and value.get("doorbellTalk") is True
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            if attempt == 0:
+                await asyncio.sleep(.15)
+    return False
+
+
 async def show_tv(runtime):
     host = receiver_host(runtime.entry.options.get("tv_host", ""))
     await runtime.prime()
@@ -36,6 +56,8 @@ async def show_tv(runtime):
         "media": {"video": {"uri": signed_url(runtime, "/api/mi_cateye/raw.mp4", 90),
                             "width": 640, "height": 360, "muted": True, "softwareDecoder": True}},
     }
+    if await supports_talk(runtime, f"http://{host}:7980"):
+        payload.update(talk_controls(runtime))
     try:
         async with runtime.client.post(f"http://{host}:7980/notify", json=payload, timeout=aiohttp.ClientTimeout(total=8)) as response:
             response.raise_for_status()
@@ -49,6 +71,7 @@ async def show_xiaoai(runtime):
     await runtime.ensure_video()
     host = receiver_host(runtime.entry.options.get("xiaoai_host", ""))
     endpoint = f"http://{host}:7979"
+    talk_ready = await supports_talk(runtime, endpoint)
     runtime.xiaoai_generation = getattr(runtime, "xiaoai_generation", 0) + 1
     generation = runtime.xiaoai_generation
 
@@ -75,6 +98,8 @@ async def show_xiaoai(runtime):
                 "media": {"video": {"uri": signed_url(runtime, "/api/mi_cateye/raw.mp4"),
                                     "width": 854, "height": 480, "muted": True}},
             }
+            if talk_ready:
+                payload.update(talk_controls(runtime))
             started = time.monotonic()
             await request("POST", "/notify", json=payload)
             await asyncio.sleep(6)

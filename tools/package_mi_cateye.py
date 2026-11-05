@@ -35,14 +35,14 @@ def main():
     if run(["git", "rev-parse", "HEAD"], upstream).strip() != PIN:
         raise SystemExit("Unexpected upstream revision")
     # A modified upstream implementation must never silently enter a release.
-    patch = ROOT / "media_core/captcha-refresh.patch"
+    patch = ROOT / "media_core/runtime.patch"
     changed = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=upstream)
     if not changed:
         subprocess.check_call(["git", "apply", "--check", str(patch.resolve())], cwd=upstream)
         subprocess.check_call(["git", "apply", str(patch.resolve())], cwd=upstream)
         changed = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=upstream)
     if changed.replace(b"\r\n", b"\n") != patch.read_bytes().replace(b"\r\n", b"\n"):
-        raise SystemExit("Upstream changes do not exactly match the reviewed captcha patch")
+        raise SystemExit("Upstream changes do not exactly match the reviewed runtime patch")
     overlay = upstream / "cmd" / "doorbellcore"
     overlay.mkdir(parents=True, exist_ok=True)
     for name in ("main.go", "main_test.go", "config_patch_test.go"):
@@ -53,7 +53,10 @@ def main():
                           ("recordings.go", "internal/xiaomi/cateye_recordings.go"),
                           ("recordings_test.go", "internal/xiaomi/cateye_recordings_test.go")):
         shutil.copyfile(ROOT / "media_core" / local, upstream / target)
-    run([args.go, "test", "./pkg/xiaomi", "./internal/xiaomi", "./cmd/doorbellcore"], upstream)
+    run([args.go, "test", "./pkg/xiaomi", "./pkg/xiaomi/miss", "./pkg/xiaomi/miss/cs2", "./pkg/tutk", "./internal/xiaomi", "./cmd/doorbellcore"], upstream)
+    # Upstream stream recursion/template tests require registration absent in
+    # this minimal profile. Exercise the new active-producer guard explicitly.
+    run([args.go, "test", "./internal/streams", "-run", "TestActive"], upstream)
     version = json.loads((ROOT / "custom_components/mi_cateye/manifest.json").read_text())["version"]
     (ROOT / "work").mkdir(exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="mi-cateye-package-" + version + "-", dir=ROOT / "work"))
@@ -81,7 +84,7 @@ def main():
     licenses.mkdir()
     shutil.copyfile(upstream / "LICENSE", licenses / "GO2RTC-LICENSE.txt")
     shutil.copyfile(ROOT / "media_core/SOURCE.json", licenses / "GO2RTC-SOURCE.json")
-    shutil.copyfile(patch, licenses / "captcha-refresh.patch")
+    shutil.copyfile(patch, licenses / "runtime.patch")
     # Include notices from every module actually reachable from this profile.
     deps = list(objects(run([args.go, "list", "-deps", "-json", "./cmd/doorbellcore"], upstream, env)))
     modules = {p["Module"]["Path"]: p["Module"] for p in deps if p.get("Module") and not p["Module"].get("Main")}

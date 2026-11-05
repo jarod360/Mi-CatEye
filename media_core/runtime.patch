@@ -1,0 +1,656 @@
+diff --git a/internal/streams/active_producer.go b/internal/streams/active_producer.go
+new file mode 100644
+index 0000000..6829274
+--- /dev/null
++++ b/internal/streams/active_producer.go
+@@ -0,0 +1,16 @@
++package streams
++
++import (
++ "errors"
++ "github.com/AlexxIT/go2rtc/pkg/core"
++)
++
++// ActiveProducer never dials or starts a source. The caller must tolerate closure
++// when the last video viewer leaves; it must never reconnect a talk session.
++func(s *Stream) ActiveProducer()(core.Producer,error){
++ s.mu.Lock();defer s.mu.Unlock()
++ if len(s.producers)!=1{return nil,errors.New("single_active_producer_required")}
++ p:=s.producers[0];p.mu.Lock();defer p.mu.Unlock()
++ if p.state!=stateStart||p.conn==nil{return nil,errors.New("live_producer_unavailable")}
++ return p.conn,nil
++}
+diff --git a/internal/streams/active_producer_test.go b/internal/streams/active_producer_test.go
+new file mode 100644
+index 0000000..0f781c2
+--- /dev/null
++++ b/internal/streams/active_producer_test.go
+@@ -0,0 +1,15 @@
++package streams
++
++import("testing";"github.com/AlexxIT/go2rtc/pkg/core")
++type existingOnly struct{core.Producer}
++func TestActiveProducerNeverDialsAndReturnsSameConnection(t *testing.T){
++ s:=NewStream("not-a-valid-dial-source")
++ if _,e:=s.ActiveProducer();e==nil{t.Fatal("inactive source accepted")}
++ original:=&existingOnly{}
++ s.producers[0].conn=original;s.producers[0].state=stateStart
++ for i:=0;i<2;i++{p,e:=s.ActiveProducer();if e!=nil||p!=original{t.Fatal("connection replaced",e)}}
++ s.producers[0].state=stateNone
++ if _,e:=s.ActiveProducer();e==nil{t.Fatal("closed source accepted")}
++ s.producers=append(s.producers,&Producer{conn:original,state:stateStart})
++ if _,e:=s.ActiveProducer();e==nil{t.Fatal("ambiguous sources accepted")}
++}
+diff --git a/internal/xiaomi/cateye_talk.go b/internal/xiaomi/cateye_talk.go
+new file mode 100644
+index 0000000..ff2f995
+--- /dev/null
++++ b/internal/xiaomi/cateye_talk.go
+@@ -0,0 +1,99 @@
++package xiaomi
++
++import (
++ "context"
++ "crypto/rand"
++ "encoding/hex"
++ "encoding/json"
++ "errors"
++ "io"
++ "net/http"
++ "sync"
++ "time"
++ "github.com/AlexxIT/go2rtc/internal/api"
++ "github.com/AlexxIT/go2rtc/internal/streams"
++ "github.com/AlexxIT/go2rtc/pkg/xiaomi/miss"
++)
++
++type talkWriter interface{WriteFrame([]byte)error;Close()error}
++type talkOwner struct{id string;writer talkWriter;cancel context.CancelFunc;upload,listen bool}
++type talkAPI struct{mu sync.Mutex;active *talkOwner;begin func(context.Context)(talkWriter,error)}
++func InitTalk(){
++ h:=&talkAPI{begin:func(ctx context.Context)(talkWriter,error){
++  stream:=streams.Get("doorbell_live");if stream==nil{return nil,errors.New("live_video_required")}
++  p,e:=stream.ActiveProducer();if e!=nil{return nil,e}
++  camera,ok:=p.(*miss.Producer);if !ok{return nil,errors.New("talk_source_unsupported")}
++  return camera.BeginTalk(ctx)
++ }}
++ api.HandleFunc("api/doorbell/talk",h.serve)
++}
++func(h *talkAPI) close(owner *talkOwner){
++ h.mu.Lock();defer h.mu.Unlock()
++ if h.active!=owner{return};owner.cancel();owner.writer.Close();h.active=nil
++}
++func(h *talkAPI) serve(w http.ResponseWriter,r *http.Request){
++ if r.Method!=http.MethodPost{w.WriteHeader(405);return}
++ w.Header().Set("Cache-Control","no-store")
++ switch r.URL.Query().Get("action"){
++ case "begin":
++  h.mu.Lock()
++  if h.active!=nil{h.mu.Unlock();http.Error(w,"talk_busy",409);return}
++  ctx,cancel:=context.WithTimeout(context.Background(),60*time.Second)
++  writer,e:=h.begin(ctx)
++  if e!=nil{
++   cancel();h.mu.Unlock()
++   reason:="talk_transport_unavailable"
++   switch e.Error(){case "live_video_required","single_active_producer_required","live_producer_unavailable","talk_source_unsupported","talk_model_unsupported","talk_already_active","talk_start_timeout","talk_start_rejected":reason=e.Error()}
++   w.Header().Set("Content-Type","application/json");w.WriteHeader(409)
++   json.NewEncoder(w).Encode(map[string]string{"error":reason});return
++  }
++  nonce:=make([]byte,24);if _,e=rand.Read(nonce);e!=nil{writer.Close();cancel();h.mu.Unlock();w.WriteHeader(500);return}
++  owner:=&talkOwner{id:hex.EncodeToString(nonce),writer:writer,cancel:cancel};h.active=owner;h.mu.Unlock()
++  go func(){<-ctx.Done();h.close(owner)}()
++  go func(){
++   select{case <-ctx.Done():return;case <-time.After(3*time.Second):}
++   h.mu.Lock();abandoned:=h.active==owner&&!owner.upload;h.mu.Unlock()
++   if abandoned{h.close(owner)}
++  }()
++  w.Header().Set("Content-Type","application/json")
++  json.NewEncoder(w).Encode(map[string]any{"session":owner.id,"max_seconds":60,"frame_bytes":480,"sample_rate":8000})
++ case "audio","end","listen":
++  id:=r.Header.Get("X-Talk-Session")
++  h.mu.Lock();owner:=h.active
++  if owner==nil||len(id)!=48||id!=owner.id{h.mu.Unlock();http.Error(w,"talk_session_unavailable",404);return}
++  if r.URL.Query().Get("action")=="end"{h.mu.Unlock();h.close(owner);w.WriteHeader(204);return}
++  if r.URL.Query().Get("action")=="listen"{
++   if owner.listen{h.mu.Unlock();w.WriteHeader(409);return}
++   reader,ok:=owner.writer.(interface{PCM()(<-chan []byte,<-chan struct{},error)})
++   if !ok{h.mu.Unlock();w.WriteHeader(409);return}
++   owner.listen=true;h.mu.Unlock();defer h.close(owner)
++   frames,done,e:=reader.PCM();if e!=nil{w.WriteHeader(409);return}
++   w.Header().Set("Content-Type","audio/pcm;rate=8000;channels=1;format=s16le");w.WriteHeader(200)
++   controller:=http.NewResponseController(w);controller.Flush()
++   for{
++    select{
++    case <-done:return
++    case <-r.Context().Done():return
++    case <-time.After(2*time.Second):return
++    case b:=<-frames:
++     controller.SetWriteDeadline(time.Now().Add(2*time.Second))
++     if _,e=w.Write(b);e!=nil{return};if controller.Flush()!=nil{return}
++    }
++   }
++  }
++  if owner.upload{h.mu.Unlock();http.Error(w,"talk_upload_busy",409);return}
++  if r.Header.Get("Content-Type")!="audio/pcma"{h.mu.Unlock();w.WriteHeader(415);return}
++  owner.upload=true;h.mu.Unlock();defer h.close(owner)
++  // A stalled uplink must not leave the speaker open.
++  controller:=http.NewResponseController(w);frame:=make([]byte,480)
++  for count:=0;count<1000;count++{
++   controller.SetReadDeadline(time.Now().Add(2*time.Second))
++   n,e:=io.ReadFull(r.Body,frame)
++   if e==io.EOF&&n==0{w.WriteHeader(204);return}
++   if e!=nil{http.Error(w,"talk_audio_interrupted",400);return}
++   if e=owner.writer.WriteFrame(frame);e!=nil{http.Error(w,"talk_audio_stopped",409);return}
++  }
++  http.Error(w,"talk_time_limit",408)
++ default:w.WriteHeader(400)
++ }
++}
+diff --git a/internal/xiaomi/cateye_talk_test.go b/internal/xiaomi/cateye_talk_test.go
+new file mode 100644
+index 0000000..08c01bf
+--- /dev/null
++++ b/internal/xiaomi/cateye_talk_test.go
+@@ -0,0 +1,21 @@
++package xiaomi
++import("bytes";"context";"encoding/json";"net/http/httptest";"strings";"testing")
++type testTalk struct{closed,frames int}
++func(s *testTalk) WriteFrame(b []byte)error{s.frames++;return nil}
++func(s *testTalk) Close()error{s.closed++;return nil}
++func TestTalkHTTPRequiresOwnerAndStopsOnEnd(t *testing.T){
++ writer:=&testTalk{};calls:=0;h:=&talkAPI{begin:func(context.Context)(talkWriter,error){calls++;return writer,nil}}
++ invoke:=func(action,id string,b []byte)*httptest.ResponseRecorder{r:=httptest.NewRequest("POST","/api/doorbell/talk?action="+action,bytes.NewReader(b));r.Header.Set("X-Talk-Session",id);r.Header.Set("Content-Type","audio/pcma");w:=httptest.NewRecorder();h.serve(w,r);return w}
++ begin:=invoke("begin","",nil);if begin.Code!=200{t.Fatal(begin.Code)};var result map[string]any;json.Unmarshal(begin.Body.Bytes(),&result);id:=result["session"].(string)
++ if invoke("begin","",nil).Code!=409||calls!=1{t.Fatal("parallel call accepted")}
++ if invoke("end",strings.Repeat("f",48),nil).Code!=404{t.Fatal("wrong owner accepted")}
++ if invoke("end",id,nil).Code!=204||writer.closed!=1{t.Fatal("end did not release")}
++ if invoke("audio",id,make([]byte,480)).Code!=404{t.Fatal("audio after end accepted")}
++}
++func TestTalkHTTPStreams480AndEndsOnTruncation(t *testing.T){
++ writer:=&testTalk{};h:=&talkAPI{begin:func(context.Context)(talkWriter,error){return writer,nil}}
++ w:=httptest.NewRecorder();h.serve(w,httptest.NewRequest("POST","/?action=begin",nil));var result map[string]any;json.Unmarshal(w.Body.Bytes(),&result)
++ request:=httptest.NewRequest("POST","/?action=audio",bytes.NewReader(make([]byte,481)));request.Header.Set("X-Talk-Session",result["session"].(string));request.Header.Set("Content-Type","audio/pcma")
++ w=httptest.NewRecorder();h.serve(w,request)
++ if w.Code!=400||writer.frames!=1||writer.closed!=1||h.active!=nil{t.Fatal("truncated uplink did not stop",w.Code,writer.frames,writer.closed)}
++}
+diff --git a/internal/xiaomi/xiaomi.go b/internal/xiaomi/xiaomi.go
+index 1e57842..b19f1e5 100644
+--- a/internal/xiaomi/xiaomi.go
++++ b/internal/xiaomi/xiaomi.go
+@@ -311,6 +311,12 @@ func apiAuth(w http.ResponseWriter, r *http.Request) {
+ 	var err error
+ 
+ 	switch {
++	case r.Form.Get("refresh_captcha") == "true":
++		if auth == nil {
++			http.Error(w, "no login in progress", http.StatusBadRequest)
++			return
++		}
++		err = auth.RefreshCaptcha()
+ 	case username != "" || password != "":
+ 		auth = xiaomi.NewCloud(AppXiaomiHome)
+ 		err = auth.Login(username, password)
+diff --git a/pkg/tutk/conn.go b/pkg/tutk/conn.go
+index e061069..44720e8 100644
+--- a/pkg/tutk/conn.go
++++ b/pkg/tutk/conn.go
+@@ -63,6 +63,14 @@ type Conn struct {
+ 	err    error
+ 	cmdMu  sync.Mutex
+ 	cmdAck func()
++	speakerStart atomic.Uint64
++	speakerSync atomic.Uint64
++	speakerReady atomic.Uint64
++}
++
++// SpeakerDiagnostics reports protocol control counters, never packet contents.
++func(c *Conn) SpeakerDiagnostics() map[string]uint64 {
++ return map[string]uint64{"channel_start":c.speakerStart.Load(),"channel_sync":c.speakerSync.Load(),"channel_ready":c.speakerReady.Load()}
+ }
+ 
+ // Read overwrite net.Conn
+@@ -226,6 +234,9 @@ func (c *Conn) handleMsg(msg []byte) int {
+ 	case 0x08:
+ 		switch ch := msg[14]; ch {
+ 		case 0, 1:
++			if ch==1&&len(msg)>=30 {
++			 switch string(msg[28:30]){case "\x00\x00":c.speakerStart.Add(1);case "\x00\x07","\x00\x08":c.speakerSync.Add(1);case "\x00\x13":c.speakerReady.Add(1)}
++			}
+ 			return c.session.SessionRead(ch, msg[28:])
+ 		case 5:
+ 			if len(msg) == 48 {
+diff --git a/pkg/tutk/native_audio_frame_test.go b/pkg/tutk/native_audio_frame_test.go
+new file mode 100644
+index 0000000..34b5150
+--- /dev/null
++++ b/pkg/tutk/native_audio_frame_test.go
+@@ -0,0 +1,11 @@
++package tutk
++import("bytes";"encoding/binary";"testing")
++func TestLoockObservedNativeFrameEnvelope(t *testing.T){
++ s:=NewSession16(nil,make([]byte,8))
++ h:=make([]byte,32);binary.LittleEndian.PutUint32(h,488);binary.LittleEndian.PutUint32(h[4:],1027);binary.LittleEndian.PutUint32(h[8:],154)
++ media:=bytes.Repeat([]byte{0x73},488)
++ b:=s.SendFrameData(h,media)
++ if len(b)!=580{t.Fatal("does not match observed native UDP payload size")}
++ if binary.LittleEndian.Uint16(b[28:])!=769||binary.LittleEndian.Uint16(b[36:])!=488{t.Fatal("wrong TUTK audio envelope")}
++ if !bytes.Equal(b[52:540],media)||!bytes.Equal(b[540:548],[]byte{'O','D','U','A',32,0,0,0})||!bytes.Equal(b[548:],h){t.Fatal("audio or MISS tail corrupted")}
++}
+diff --git a/pkg/xiaomi/cloud.go b/pkg/xiaomi/cloud.go
+index 0dcfd24..35b3a5e 100644
+--- a/pkg/xiaomi/cloud.go
++++ b/pkg/xiaomi/cloud.go
+@@ -33,6 +33,7 @@ type Cloud struct {
+ 	passToken string
+ 
+ 	auth map[string]string
++	captchaURL string
+ }
+ 
+ func NewCloud(sid string) *Cloud {
+@@ -174,6 +175,7 @@ func (c *Cloud) LoginWithVerify(ticket string) error {
+ }
+ 
+ func (c *Cloud) getCaptcha(captchaURL string) error {
++	c.captchaURL = captchaURL
+ 	res, err := c.client.Get("https://account.xiaomi.com" + captchaURL)
+ 	if err != nil {
+ 		return err
+@@ -192,6 +194,14 @@ func (c *Cloud) getCaptcha(captchaURL string) error {
+ 	}
+ }
+ 
++// RefreshCaptcha retrieves a fresh challenge without submitting a guessed code.
++func (c *Cloud) RefreshCaptcha() error {
++	if c.auth == nil || c.captchaURL == "" {
++		return errors.New("xiaomi: no captcha challenge")
++	}
++	return c.getCaptcha(c.captchaURL)
++}
++
+ func (c *Cloud) authStart(notificationURL string) error {
+ 	rawURL := strings.Replace(notificationURL, "/fe/service/identity/authStart", "/identity/list", 1)
+ 	res, err := c.client.Get(rawURL)
+@@ -463,7 +473,7 @@ func (c *Cloud) Request(baseURL, apiURL, params string, headers map[string]strin
+ 	}
+ 
+ 	if res1.Code != 0 {
+-		return nil, errors.New("xiaomi: " + res1.Message)
++		return nil, &RequestError{Code:res1.Code,message:res1.Message}
+ 	}
+ 
+ 	return res1.Result, nil
+diff --git a/pkg/xiaomi/miss/audio_write_test.go b/pkg/xiaomi/miss/audio_write_test.go
+new file mode 100644
+index 0000000..35787ac
+--- /dev/null
++++ b/pkg/xiaomi/miss/audio_write_test.go
+@@ -0,0 +1,29 @@
++package miss
++
++import (
++ "bytes"
++ "encoding/binary"
++ "errors"
++ "testing"
++ "github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
++)
++
++type audioCapture struct {Conn; headers,payloads [][]byte; fail bool}
++func(c *audioCapture) WritePacket(h,p []byte)error{
++ if c.fail{return errors.New("test write failure")}
++ c.headers=append(c.headers,append([]byte(nil),h...));c.payloads=append(c.payloads,append([]byte(nil),p...));return nil
++}
++func TestAudioFrameSequenceAndEncryptedPayload(t *testing.T){
++ socket:=&audioCapture{}
++ c:=&Client{Conn:socket,key:make([]byte,32)}
++ audio:=bytes.Repeat([]byte{0x29,0x72},160)
++ for i:=uint32(0);i<3;i++{
++  if err:=c.WriteAudio(codecPCMA,audio);err!=nil{t.Fatal(err)}
++  h:=socket.headers[i];p:=socket.payloads[i]
++  if binary.LittleEndian.Uint32(h[8:])!=i{t.Fatal("repeated audio frame sequence")}
++  if binary.LittleEndian.Uint32(h[4:])!=codecPCMA||int(binary.LittleEndian.Uint32(h))!=len(p){t.Fatal("invalid audio metadata")}
++  decoded,err:=crypto.Decode(p,c.key);if err!=nil||!bytes.Equal(decoded,audio){t.Fatal("corrupt encrypted audio")}
++ }
++ socket.fail=true
++ if c.WriteAudio(codecPCMA,audio)==nil||c.audioSeq!=3{t.Fatal("failure was hidden or advanced sequence")}
++}
+diff --git a/pkg/xiaomi/miss/cateye_speaker_probe_test.go b/pkg/xiaomi/miss/cateye_speaker_probe_test.go
+new file mode 100644
+index 0000000..c6f8b40
+--- /dev/null
++++ b/pkg/xiaomi/miss/cateye_speaker_probe_test.go
+@@ -0,0 +1,10 @@
++package miss
++import "testing"
++func TestProbeRejectsUnknownAndFailedSpeakerReply(t *testing.T){
++ for _,s:=range []string{`{}`,`{"code":-1}`,`{"code":0,"result":3}`,`{"unexpected":"success"}`,`garbage`}{if ok,_,_:=inspectSpeakerBody([]byte(s));ok{t.Fatal("unsafe acceptance")}}
++ for _,s:=range []string{`{"code":0}`,`{"result":"success"}`,`{"result":0}`}{if ok,_,_:=inspectSpeakerBody([]byte(s));!ok{t.Fatal("known success rejected")}}
++}
++func TestLoockBinarySpeakerStatus(t *testing.T){
++ for _,b:=range [][]byte{{0,0,0,1},{1,0,0,0},{0},{0,0},{0,0,0},{0,0,0,0,0}}{if ok,_,_:=inspectSpeakerBody(b);ok{t.Fatal("invalid binary status accepted")}}
++ if ok,_,codes:=inspectSpeakerBody([]byte{0,0,0,0});!ok||codes["status"]!=0{t.Fatal("observed zero status rejected")}
++}
+diff --git a/pkg/xiaomi/miss/client.go b/pkg/xiaomi/miss/client.go
+index 3113632..3e2ec2a 100644
+--- a/pkg/xiaomi/miss/client.go
++++ b/pkg/xiaomi/miss/client.go
+@@ -79,6 +79,7 @@ type Client struct {
+ 	Conn
+ 	key   []byte
+ 	model string
++	audioSeq uint32 // One speaker writer owns this connection.
+ }
+ 
+ const (
+@@ -266,8 +267,11 @@ func (c *Client) WriteAudio(codecID uint32, payload []byte) error {
+ 	header := make([]byte, hdrSize)
+ 	binary.LittleEndian.PutUint32(header, n)
+ 	binary.LittleEndian.PutUint32(header[4:], codecID)
++	binary.LittleEndian.PutUint32(header[8:], c.audioSeq)
+ 	binary.LittleEndian.PutUint64(header[16:], uint64(time.Now().UnixMilli())) // not really necessary
+-	return c.Conn.WritePacket(header, payload)
++	if err := c.Conn.WritePacket(header, payload); err != nil { return err }
++	c.audioSeq++
++	return nil
+ }
+ 
+ type Packet struct {
+diff --git a/pkg/xiaomi/miss/cs2/conn.go b/pkg/xiaomi/miss/cs2/conn.go
+index 2c1b395..ef9c1fa 100644
+--- a/pkg/xiaomi/miss/cs2/conn.go
++++ b/pkg/xiaomi/miss/cs2/conn.go
+@@ -265,7 +265,7 @@ func (c *Conn) WritePacket(hdr, payload []byte) error {
+ 	c.seqCh3++
+ 	binary.BigEndian.PutUint32(req[8:], n)
+ 	copy(req[offset:], hdr)
+-	copy(req[offset+hdrSize:], hdr)
++	copy(req[offset+hdrSize:], payload)
+ 
+ 	_, err := c.Conn.Write(req)
+ 	return err
+diff --git a/pkg/xiaomi/miss/cs2/write_packet_test.go b/pkg/xiaomi/miss/cs2/write_packet_test.go
+new file mode 100644
+index 0000000..c468207
+--- /dev/null
++++ b/pkg/xiaomi/miss/cs2/write_packet_test.go
+@@ -0,0 +1,26 @@
++package cs2
++
++import (
++ "bytes"
++ "encoding/binary"
++ "net"
++ "testing"
++)
++
++type packetCapture struct {net.Conn; data []byte}
++func(c *packetCapture) Write(b []byte)(int,error){c.data=append([]byte(nil),b...);return len(b),nil}
++
++func TestWritePacketPreservesAudioPayload(t *testing.T){
++ socket:=&packetCapture{}
++ c:=&Conn{Conn:socket}
++ hdr:=bytes.Repeat([]byte{0x11},hdrSize)
++ payload:=bytes.Repeat([]byte{0x73,0x28},168)
++ for seq:=uint16(0);seq<2;seq++{
++  if err:=c.WritePacket(hdr,payload);err!=nil{t.Fatal(err)}
++  b:=socket.data
++  if len(b)!=12+len(hdr)+len(payload)||b[5]!=3{t.Fatal("invalid packet envelope")}
++  if binary.BigEndian.Uint16(b[6:])!=seq{t.Fatal("sequence not advanced")}
++  if !bytes.Equal(b[12:12+len(hdr)],hdr){t.Fatal("header changed")}
++  if !bytes.Equal(b[12+len(hdr):],payload){t.Fatal("audio replaced or truncated")}
++ }
++}
+diff --git a/pkg/xiaomi/miss/producer.go b/pkg/xiaomi/miss/producer.go
+index dcea284..2a8ad4a 100644
+--- a/pkg/xiaomi/miss/producer.go
++++ b/pkg/xiaomi/miss/producer.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"net/url"
+ 	"time"
++	"sync"
+ 
+ 	"github.com/AlexxIT/go2rtc/pkg/core"
+ 	"github.com/AlexxIT/go2rtc/pkg/h264"
+@@ -15,6 +16,15 @@ import (
+ type Producer struct {
+ 	core.Connection
+ 	client *Client
++	talkMu sync.Mutex
++	controlOnce sync.Once
++	controlMu sync.Mutex
++	controlPending map[uint32]chan []byte
++	receiverMu sync.RWMutex
++}
++
++func(p *Producer) GetTrack(media *core.Media,codec *core.Codec)(*core.Receiver,error){
++ p.receiverMu.Lock();defer p.receiverMu.Unlock();return p.Connection.GetTrack(media,codec)
+ }
+ 
+ func Dial(rawURL string) (core.Producer, error) {
+@@ -184,17 +194,21 @@ func (p *Producer) Start() error {
+ 			audioTS += timestamp40ms
+ 		}
+ 
++		p.receiverMu.RLock()
+ 		for _, recv := range p.Receivers {
+ 			if recv.Codec.Name == name {
+ 				recv.WriteRTP(pkt2)
+ 				break
+ 			}
+ 		}
++		p.receiverMu.RUnlock()
+ 	}
+ }
+ 
+ func (p *Producer) Stop() error {
+ 	_ = p.client.StopMedia()
++	p.receiverMu.Lock()
++	defer p.receiverMu.Unlock()
+ 	return p.Connection.Stop()
+ }
+ 
+diff --git a/pkg/xiaomi/miss/speaker_ack.go b/pkg/xiaomi/miss/speaker_ack.go
+new file mode 100644
+index 0000000..edb6d74
+--- /dev/null
++++ b/pkg/xiaomi/miss/speaker_ack.go
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: MIT
++package miss
++import("encoding/binary";"encoding/json";"sort")
++func inspectSpeakerBody(data []byte)(bool,[]string,map[string]int){
++ // This Loock device answers 0x107 with a four-byte status, not JSON.
++ // Only exact zero is accepted; unknown lengths and nonzero codes fail closed.
++ if len(data)==4&&!json.Valid(data){
++  status:=binary.BigEndian.Uint32(data)
++  return status==0,[]string{"binary_status"},map[string]int{"status":int(status)}
++ }
++ var obj map[string]any
++ if json.Unmarshal(data,&obj)!=nil{return false,nil,nil}
++ keys:=[]string{};numbers:=map[string]int{};accepted:=false;rejected:=false
++ for k,v:=range obj{
++  keys=append(keys,k)
++  if k=="result" && v=="success"{accepted=true}
++  switch k{case "code","result","sample_rate","samplerate","codec_id","channels":if n,ok:=v.(float64);ok{numbers[k]=int(n);if k=="code"||k=="result"{if n==0{accepted=true}else{rejected=true}}}}
++ }
++ sort.Strings(keys);return accepted&&!rejected,keys,numbers
++}
+diff --git a/pkg/xiaomi/miss/talk_pcm_test.go b/pkg/xiaomi/miss/talk_pcm_test.go
+new file mode 100644
+index 0000000..3120f9c
+--- /dev/null
++++ b/pkg/xiaomi/miss/talk_pcm_test.go
+@@ -0,0 +1,15 @@
++package miss
++import("context";"testing";"time";"github.com/AlexxIT/go2rtc/pkg/core")
++func TestTalkPCMUsesExistingConnectionAndKeepsVideoTrack(t *testing.T){
++ w:=&talkTestWire{key:make([]byte,32),commands:make(chan []byte,4)};defer close(w.commands)
++ audio:=&core.Media{Kind:core.KindAudio,Direction:core.DirectionRecvonly,Codecs:[]*core.Codec{{Name:core.CodecPCMA,ClockRate:8000}}}
++ video:=&core.Media{Kind:core.KindVideo,Direction:core.DirectionRecvonly,Codecs:[]*core.Codec{{Name:core.CodecH265}}}
++ p:=&Producer{client:&Client{Conn:w,key:w.key,model:ModelLoockV2}};p.Medias=[]*core.Media{video,audio}
++ videoTrack,_:=p.GetTrack(video,video.Codecs[0])
++ talk,e:=p.BeginTalk(context.Background());if e!=nil{t.Fatal(e)}
++ frames,done,e:=talk.PCM();if e!=nil{t.Fatal(e)}
++ track,_:=p.GetTrack(audio,audio.Codecs[0]);track.WriteRTP(&core.Packet{Payload:[]byte{0xd5,0x55}})
++ select{case b:=<-frames:if len(b)!=4||b[0]!=8||b[2]!=248||b[3]!=255{t.Fatal("wrong PCM",b)};case <-time.After(time.Second):t.Fatal("no downlink audio")}
++ talk.Close();select{case <-done:default:t.Fatal("listen not stopped")}
++ same,_:=p.GetTrack(video,video.Codecs[0]);if same!=videoTrack{t.Fatal("video track replaced")}
++}
+diff --git a/pkg/xiaomi/miss/talk_session.go b/pkg/xiaomi/miss/talk_session.go
+new file mode 100644
+index 0000000..5d8f8c5
+--- /dev/null
++++ b/pkg/xiaomi/miss/talk_session.go
+@@ -0,0 +1,102 @@
++package miss
++
++import (
++ "context"
++ "encoding/binary"
++ "errors"
++ "sync"
++ "time"
++ "github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
++ "github.com/AlexxIT/go2rtc/pkg/core"
++ "github.com/AlexxIT/go2rtc/pkg/pcm"
++)
++
++// TalkSession is one explicit start/end call on the existing video connection.
++// It does not dial, start media, change volume, or acquire a microphone.
++type TalkSession struct{
++ p *Producer
++ ctx context.Context
++ cancel context.CancelFunc
++ mu sync.Mutex
++ closed bool
++ done chan struct{}
++ audioSender *core.Sender
++ audio chan []byte
++}
++
++func(p *Producer) readControls(){
++ for{
++  cmd,data,e:=p.client.Conn.ReadCommand();if e!=nil{return}
++  if cmd==cmdEncoded{
++   if len(data)<8{continue};data,e=crypto.Decode(data,p.client.key);if e!=nil||len(data)<4{continue}
++   cmd=binary.BigEndian.Uint32(data);data=data[4:]
++  }
++  p.controlMu.Lock();ch:=p.controlPending[cmd];if ch!=nil{select{case ch<-data:default:}};p.controlMu.Unlock()
++ }
++}
++
++func(p *Producer) BeginTalk(parent context.Context)(*TalkSession,error){
++ if p.client.model!=ModelLoockV2{return nil,errors.New("talk_model_unsupported")}
++ if !p.talkMu.TryLock(){return nil,errors.New("talk_already_active")}
++ ctx,cancel:=context.WithTimeout(parent,60*time.Second)
++ ch:=make(chan []byte,1)
++ p.controlMu.Lock();if p.controlPending==nil{p.controlPending=map[uint32]chan []byte{}};p.controlPending[cmdSpeakerStartRes]=ch;p.controlMu.Unlock()
++ defer func(){p.controlMu.Lock();if p.controlPending[cmdSpeakerStartRes]==ch{delete(p.controlPending,cmdSpeakerStartRes)};p.controlMu.Unlock()}()
++ p.controlOnce.Do(func(){go p.readControls()})
++ fail:=func(e error)(*TalkSession,error){cancel();p.client.WriteCommand(binary.BigEndian.AppendUint32(nil,cmdSpeakerStop));p.talkMu.Unlock();return nil,e}
++ if e:=ctx.Err();e!=nil{cancel();p.talkMu.Unlock();return nil,e}
++ if e:=p.client.StartSpeaker();e!=nil{return fail(e)}
++ timer:=time.NewTimer(4*time.Second);defer timer.Stop()
++ select{
++ case <-ctx.Done():return fail(ctx.Err())
++ case <-timer.C:return fail(errors.New("talk_start_timeout"))
++ case data:=<-ch:
++  ok,_,_:=inspectSpeakerBody(data);if !ok{return fail(errors.New("talk_start_rejected"))}
++ }
++ s:=&TalkSession{p:p,ctx:ctx,cancel:cancel,done:make(chan struct{})}
++ go func(){<-ctx.Done();s.Close()}()
++ return s,nil
++}
++
++// WriteFrame accepts exactly the 480-byte PCMA frame observed on this device.
++// The audio transport must pace frames at 60 ms and must not buffer a backlog.
++func(s *TalkSession) WriteFrame(data []byte)error{
++ s.mu.Lock();defer s.mu.Unlock()
++ if s.closed{return errors.New("talk_ended")}
++ if e:=s.ctx.Err();e!=nil{return e}
++ if len(data)!=480{return errors.New("talk_frame_size_rejected")}
++ return s.p.client.WriteAudio(codecPCMA,data)
++}
++
++func(s *TalkSession) Close()error{
++ s.mu.Lock();defer s.mu.Unlock()
++ if s.closed{return nil}
++ s.closed=true;s.cancel()
++ close(s.done)
++ if s.audioSender!=nil{s.audioSender.Close()}
++ defer s.p.talkMu.Unlock()
++ return s.p.client.WriteCommand(binary.BigEndian.AppendUint32(nil,cmdSpeakerStop))
++}
++
++// PCM subscribes to the same connection's incoming track; it never dials.
++func(s *TalkSession) PCM()(<-chan []byte,<-chan struct{},error){
++ s.mu.Lock();defer s.mu.Unlock()
++ if s.closed{return nil,nil,errors.New("talk_ended")}
++ if s.audio!=nil{return s.audio,s.done,nil}
++ for _,media:=range s.p.GetMedias(){
++  if media.Kind!=core.KindAudio||media.Direction!=core.DirectionRecvonly{continue}
++  for _,codec:=range media.Codecs{
++   if codec.Name!=core.CodecPCMA||codec.ClockRate!=8000{continue}
++   track,e:=s.p.GetTrack(media,codec);if e!=nil{return nil,nil,e}
++   queue:=make(chan []byte,8);sender:=core.NewSender(media,codec)
++   sender.Handler=func(packet *core.Packet){
++    b:=make([]byte,len(packet.Payload)*2)
++    for i,v:=range packet.Payload{binary.LittleEndian.PutUint16(b[i*2:],uint16(pcm.PCMAtoPCM(v)))}
++    select{case <-s.done:return;default:}
++    select{case queue<-b:default:select{case <-queue:default:};select{case queue<-b:default:}}
++   }
++   sender.HandleRTP(track);s.audio=queue;s.audioSender=sender;return queue,s.done,nil
++  }
++ }
++ return nil,nil,errors.New("talk_receive_codec_unsupported")
++}
+diff --git a/pkg/xiaomi/miss/talk_session_test.go b/pkg/xiaomi/miss/talk_session_test.go
+new file mode 100644
+index 0000000..3faf092
+--- /dev/null
++++ b/pkg/xiaomi/miss/talk_session_test.go
+@@ -0,0 +1,32 @@
++package miss
++import("context";"encoding/binary";"io";"sync";"testing";"time";"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto")
++type talkTestWire struct{Conn;key []byte;commands chan []byte;mu sync.Mutex;starts,stops,frames int}
++func(w *talkTestWire) ReadCommand()(uint32,[]byte,error){b,ok:=<-w.commands;if !ok{return 0,nil,io.EOF};return cmdEncoded,b,nil}
++func(w *talkTestWire) WriteCommand(cmd uint32,b []byte)error{
++ plain,e:=crypto.Decode(b,w.key);if e!=nil{return e};command:=binary.BigEndian.Uint32(plain)
++ w.mu.Lock();defer w.mu.Unlock()
++ switch command{case cmdSpeakerStartReq:w.starts++;reply,_:=crypto.Encode(append(binary.BigEndian.AppendUint32(nil,cmdSpeakerStartRes),0,0,0,0),w.key);w.commands<-reply;case cmdSpeakerStop:w.stops++};return nil
++}
++func(w *talkTestWire) WritePacket(h,b []byte)error{w.mu.Lock();defer w.mu.Unlock();w.frames++;return nil}
++func TestTalkClickStartEndAndRepeatOnSameConnection(t *testing.T){
++ w:=&talkTestWire{key:make([]byte,32),commands:make(chan []byte,4)};defer close(w.commands)
++ p:=&Producer{client:&Client{Conn:w,key:w.key,model:ModelLoockV2}}
++ for i:=0;i<2;i++{
++  s,e:=p.BeginTalk(context.Background());if e!=nil{t.Fatal(e)}
++  if _,e=p.BeginTalk(context.Background());e==nil{t.Fatal("second speaker allowed")}
++  if s.WriteFrame(make([]byte,320))==nil{t.Fatal("wrong frame accepted")}
++  if e=s.WriteFrame(make([]byte,480));e!=nil{t.Fatal(e)}
++  if e=s.Close();e!=nil{t.Fatal(e)};s.Close()
++  if s.WriteFrame(make([]byte,480))==nil{t.Fatal("audio accepted after end")}
++ }
++ w.mu.Lock();defer w.mu.Unlock();if w.starts!=2||w.stops!=2||w.frames!=2{t.Fatal(w.starts,w.stops,w.frames)}
++}
++func TestTalkCancellationStopsAndReleasesWriter(t *testing.T){
++ w:=&talkTestWire{key:make([]byte,32),commands:make(chan []byte,4)};defer close(w.commands)
++ p:=&Producer{client:&Client{Conn:w,key:w.key,model:ModelLoockV2}}
++ ctx,cancel:=context.WithCancel(context.Background());s,e:=p.BeginTalk(ctx);if e!=nil{t.Fatal(e)};cancel()
++ deadline:=time.Now().Add(time.Second)
++ for{w.mu.Lock();stopped:=w.stops==1;w.mu.Unlock();if stopped{break};if time.Now().After(deadline){t.Fatal("cancel did not stop speaker")};time.Sleep(time.Millisecond)}
++ if s.WriteFrame(make([]byte,480))==nil{t.Fatal("cancelled audio accepted")}
++ next,e:=p.BeginTalk(context.Background());if e!=nil{t.Fatal("speaker not released",e)};next.Close()
++}
+diff --git a/pkg/xiaomi/request_error.go b/pkg/xiaomi/request_error.go
+new file mode 100644
+index 0000000..8c08f48
+--- /dev/null
++++ b/pkg/xiaomi/request_error.go
+@@ -0,0 +1,4 @@
++package xiaomi
++// RequestError preserves the existing message while retaining a nonsecret code.
++type RequestError struct{Code int;message string}
++func(e *RequestError) Error()string{return "xiaomi: "+e.message}

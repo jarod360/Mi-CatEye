@@ -13,10 +13,14 @@
     "ffmpeg",
     "xiaomi"
   ],
-  "status": "candidate_not_deployed",
+  "status": "release_candidate",
   "profile_features": [
     "shared_live_video",
     "cloud_event_recording_list",
-    "authenticated_recording_playback"
-  ]
+    "authenticated_recording_playback",
+    "single_producer_talk",
+    "bounded_audio_downlink",
+    "preset_replies"
+  ],
+  "runtime_patch": "runtime.patch"
 }

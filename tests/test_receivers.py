@@ -54,7 +54,10 @@ def rig(monkeypatch):
         entry=SimpleNamespace(options={"xiaoai_host": "192.168.1.10", "tv_host": "192.168.1.11"}),
         ensure_video=AsyncMock(), prime=AsyncMock(), cancel_prime=lambda: calls.append(("cancel",)),
         xiaoai_lock=asyncio.Lock(), closed=False,
-        client=SimpleNamespace(request=request, post=lambda url, **kwargs: request("POST", url, **kwargs)),
+        # Legacy receiver lacks the new capability marker, but still answers
+        # the health endpoint. Existing video/volume behavior must remain valid.
+        client=SimpleNamespace(request=request, get=lambda *a, **kw: Response({}),
+                               post=lambda url, **kwargs: request("POST", url, **kwargs)),
     )
     return runtime, calls, state
 

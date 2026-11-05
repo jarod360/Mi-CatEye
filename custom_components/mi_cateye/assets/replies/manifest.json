@@ -1,0 +1,20 @@
+{
+  "wait": {
+    "text": "请稍等，马上来。",
+    "voice": "zh-CN-YunyangNeural",
+    "bytes": 17760,
+    "sha256": "dcf659ae41acd78489c8cde1a328fc05a5476e2ba954655753f97c6a61a143c8"
+  },
+  "parcel": {
+    "text": "请把快递放门口，谢谢。",
+    "voice": "zh-CN-YunyangNeural",
+    "bytes": 22080,
+    "sha256": "ce983a256ca63eb931ca4766a9ee48fb44874fef72c7e2f8501f7f2cbbd30adb"
+  },
+  "later": {
+    "text": "现在不方便，请稍后再来。",
+    "voice": "zh-CN-YunyangNeural",
+    "bytes": 23040,
+    "sha256": "a13e31344df5f11c9193487fcd3b24447c75b99b79a48de950712d65a70db116"
+  }
+}

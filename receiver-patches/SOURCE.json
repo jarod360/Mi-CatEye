@@ -1,0 +1,8 @@
+{
+  "source": "https://github.com/mhoogenbosch/PiPup",
+  "version": "0.30.1",
+  "commit": "b95ecc7b81e7190ddd201a415152d39e17ec376c",
+  "patch": "pipup-0.30.1-cateye.patch",
+  "custom_version": "0.30.1-cateye-rc3",
+  "signing": "Use your own persistent keystore. No private signing key is distributed."
+}
