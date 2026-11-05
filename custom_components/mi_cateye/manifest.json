@@ -1,7 +1,7 @@
 {
   "domain": "mi_cateye",
   "name": "Mi-CatEye",
-  "version": "0.2.0b4",
+  "version": "0.2.0b5",
   "config_flow": true,
   "single_config_entry": true,
   "integration_type": "device",

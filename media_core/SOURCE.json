@@ -20,7 +20,10 @@
     "authenticated_recording_playback",
     "single_producer_talk",
     "bounded_audio_downlink",
-    "preset_replies"
+    "preset_replies",
+    "validated_camera_sd_playback",
+    "exclusive_live_sd_device_gate",
+    "bounded_sd_cache"
   ],
   "runtime_patch": "runtime.patch"
 }

@@ -27,7 +27,7 @@ def test_recording_ids_are_opaque_and_path_safe(identity):
 @pytest.mark.asyncio
 async def test_recording_list_filters_private_upstream_fields(hass, monkeypatch):
     from mi_cateye import recordings
-    hass.data[DOMAIN] = {"runtime": SimpleNamespace(closed=False)}
+    hass.data[DOMAIN] = {"runtime": SimpleNamespace(closed=False, entry=SimpleNamespace(data={"did":"1"}), cameras={})}
     fake = AsyncMock(return_value={"items": [
         {"id": "a" * 32, "start": 1793200000001, "duration": 6.1, "event": "Pass", "fileId": "private", "url": "https://private/", "token": "private"},
         {"id": "b" * 32, "start": 1, "duration": 5},
@@ -42,6 +42,7 @@ async def test_recording_list_filters_private_upstream_fields(hass, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_unsupported_sd_request_never_opens_a_session(hass, monkeypatch):
+    hass.data[DOMAIN] = {"runtime": SimpleNamespace(closed=False, entry=SimpleNamespace(data={"did":"1"}), cameras={})}
     from mi_cateye import recordings
     backend = AsyncMock()
     monkeypatch.setattr(recordings, "backend_request", backend)

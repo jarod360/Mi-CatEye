@@ -19,6 +19,18 @@ from .media import MediaError
 from .views import runtime_for
 
 
+SD_MODELS = {"chuangmi.camera.ipc009", "chuangmi.camera.ipc021"}
+SD_ERRORS = {"storage_device_busy": "该摄像机正在播放实时视频，请关闭后再查看录像", "sd_not_supported": "该设备尚不支持存储卡回看", "sd_index_failed": "读取存储卡目录失败，请稍后重试", "sd_file_failed": "这段本地录像未取完整，请重试或换一段", "sd_conversion_failed": "这段录像暂时无法转换播放"}
+
+@websocket_api.websocket_command({vol.Required("type"): "mi_cateye/recordings_devices"})
+@websocket_api.async_response
+async def ws_recordings_devices(hass, connection, message):
+    runtime = runtime_for(hass)
+    devices = [{"device": runtime.entry.data["did"], "name": "猫眼 · 云端事件", "source": "cloud"}]
+    devices += [{"device": did, "name": camera["name"] + " · 存储卡", "source": "sd"} for did, camera in runtime.cameras.items() if camera["model"] in SD_MODELS]
+    connection.send_result(message["id"], {"devices": devices})
+
+
 def validate_recording_id(value):
     if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{32}", value):
         raise ValueError("recording_not_found")
@@ -35,9 +47,11 @@ async def backend_request(runtime, method, path, params):
                 reason = value.get("error", "unknown") if isinstance(value, dict) else "unknown"
                 if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,60}", reason):
                     logging.getLogger(__name__).warning("Recording preparation failed: %s", reason)
-                raise ValueError("recording_unavailable")
+                raise ValueError(reason if reason in SD_ERRORS else "recording_unavailable")
             return value
-    except (aiohttp.ClientError, TimeoutError, ValueError, MediaError):
+    except ValueError as err:
+        raise ValueError(str(err) if str(err) in SD_ERRORS else "recording_unavailable") from None
+    except (aiohttp.ClientError, TimeoutError, MediaError):
         raise ValueError("recording_unavailable") from None
 
 
@@ -46,6 +60,7 @@ async def backend_request(runtime, method, path, params):
     vol.Required("start"): int,
     vol.Required("end"): int,
     vol.Optional("source", default="cloud"): vol.In(["cloud", "sd"]),
+    vol.Optional("device"): str,
 })
 @websocket_api.async_response
 async def ws_recordings_list(hass, connection, message):
@@ -53,14 +68,22 @@ async def ws_recordings_list(hass, connection, message):
     if start < 1262304000000 or not 0 < end - start <= 86400001:
         connection.send_error(message["id"], "invalid_time_range", "请选择一天内的录像")
         return
-    if message["source"] != "cloud":
-        connection.send_error(message["id"], "sd_unavailable", "这台猫眼的 SD 卡录像暂不能远程读取")
+    runtime = runtime_for(hass)
+    source = message["source"]
+    device = message.get("device", runtime.entry.data["did"])
+    if source == "sd":
+        camera = runtime.cameras.get(device)
+        if not camera or camera["model"] not in SD_MODELS:
+            connection.send_error(message["id"], "sd_unavailable", "该设备的存储卡回看尚未验证支持")
+            return
+    elif device != runtime.entry.data["did"]:
+        connection.send_error(message["id"], "invalid_source", "请选择该摄像机的存储卡录像")
         return
     try:
         value = await backend_request(runtime_for(hass), "GET", "/api/doorbell/recordings",
-                                      {"start": start, "end": end, "source": "cloud"})
+                                      {"start": start, "end": end, "source": source, "device": device})
         items = []
-        for item in value.get("items", [])[:500]:
+        for item in value.get("items", [])[:5000]:
             if not isinstance(item, dict):
                 continue
             try:
@@ -68,13 +91,13 @@ async def ws_recordings_list(hass, connection, message):
                 at, duration = item["start"], item["duration"]
                 if type(at) is not int or not start <= at < end or type(duration) not in (int, float) or not 0 < duration < 3600:
                     continue
-                items.append({"id": identity, "source": "cloud", "start": at, "duration": duration,
+                items.append({"id": identity, "source": source, "start": at, "duration": duration,
                               "event": str(item.get("event", ""))[:40]})
             except (ValueError, KeyError, TypeError):
                 continue
-        connection.send_result(message["id"], {"items": items, "source": "cloud", "sd_supported": False})
-    except (ValueError, web.HTTPException):
-        connection.send_error(message["id"], "recording_list_failed", "暂时无法读取录像，请稍后重试")
+        connection.send_result(message["id"], {"items": items, "source": source, "sd_supported": source == "sd"})
+    except (ValueError, web.HTTPException) as err:
+        connection.send_error(message["id"], "recording_list_failed", SD_ERRORS.get(str(err), "暂时无法读取录像，请稍后重试"))
 
 
 @websocket_api.websocket_command({
@@ -91,11 +114,12 @@ async def ws_recordings_prepare(hass, connection, message):
             "url": async_sign_path(hass, path, timedelta(minutes=10), use_content_user=True),
             "download_url": async_sign_path(hass, path + "?download=1", timedelta(minutes=10), use_content_user=True),
         })
-    except (ValueError, web.HTTPException):
-        connection.send_error(message["id"], "recording_prepare_failed", "这段录像暂时无法播放，可能已过期，请选择其它时间")
+    except (ValueError, web.HTTPException) as err:
+        connection.send_error(message["id"], "recording_prepare_failed", SD_ERRORS.get(str(err), "这段录像暂时无法播放，可能已过期，请选择其它时间"))
 
 
 def register_recording_commands(hass):
+    websocket_api.async_register_command(hass, ws_recordings_devices)
     websocket_api.async_register_command(hass, ws_recordings_list)
     websocket_api.async_register_command(hass, ws_recordings_prepare)
 

@@ -38,6 +38,8 @@ type Recording struct {
     Event string `json:"event"`
     FileID string `json:"-"`
     Alarm bool `json:"-"`
+    SDDevice string `json:"-"`
+    SDStart int64 `json:"-"`
 }
 
 type recordingStore struct {
@@ -54,6 +56,7 @@ func InitRecordings() {
     source,err:=url.Parse(src.Sources()[0]);if err!=nil||source.User==nil{return}
     store:=&recordingStore{source:source,directory:filepath.Join(filepath.Dir(app.ConfigPath),"recordings"),records:map[string]Recording{}}
     store.prune("")
+    pruneSD(filepath.Join(store.directory,"sd"),"")
     api.HandleFunc("api/doorbell/recordings",store.list)
     api.HandleFunc("api/doorbell/recordings/prepare",store.prepare)
     api.HandleFunc("api/doorbell/recordings/clip",store.clip)
@@ -76,6 +79,7 @@ func (s *recordingStore) list(w http.ResponseWriter,r *http.Request){
     if r.Method!="GET"{jsonReply(w,405,map[string]string{"error":"method_not_allowed"});return}
     start,end,err:=recordingWindow(r);if err!=nil{jsonReply(w,400,map[string]string{"error":"invalid_time_range"});return}
     source:=r.URL.Query().Get("source")
+    if source=="sd"{s.listSD(w,r,start,end);return}
     if source!=""&&source!="cloud"{jsonReply(w,409,map[string]string{"error":"sd_not_verified"});return}
     cloud,err:=getCloud(s.source.User.Username());if err!=nil{jsonReply(w,502,map[string]string{"error":"recording_authorization_failed"});return}
     region,_:=s.source.User.Password()
@@ -114,7 +118,7 @@ func (s *recordingStore) prepare(w http.ResponseWriter,r *http.Request){
     if r.Method!="POST"{jsonReply(w,405,map[string]string{"error":"method_not_allowed"});return}
     item,ok:=s.find(r.URL.Query().Get("id"));if !ok{jsonReply(w,404,map[string]string{"error":"recording_not_found"});return}
     ctx,cancel:=context.WithTimeout(r.Context(),90*time.Second);defer cancel()
-    if err:=s.download(ctx,item);err!=nil{reason:="recording_download_failed"; for _,known:=range []string{"untrusted_recording_host","recording_not_available","invalid_recording_playlist","invalid_recording_segment","invalid_recording_key","recording_key_failed","invalid_encrypted_recording","invalid_recording_padding","recording_conversion_failed","conversion_moov_missing","conversion_invalid_input","conversion_codec_failed","conversion_format_rejected","recording_write_failed","recording_request_failed","unsupported_recording_encryption"}{if err.Error()==known{reason=known}}; jsonReply(w,502,map[string]string{"error":reason});return}
+    if err:=s.download(ctx,item);err!=nil{reason:="recording_download_failed"; for _,known:=range []string{"storage_device_busy","sd_not_supported","sd_index_failed","sd_file_failed","sd_conversion_failed","untrusted_recording_host","recording_not_available","invalid_recording_playlist","invalid_recording_segment","invalid_recording_key","recording_key_failed","invalid_encrypted_recording","invalid_recording_padding","recording_conversion_failed","conversion_moov_missing","conversion_invalid_input","conversion_codec_failed","conversion_format_rejected","recording_write_failed","recording_request_failed","unsupported_recording_encryption"}{if err.Error()==known{reason=known}}; jsonReply(w,502,map[string]string{"error":reason});return}
     jsonReply(w,200,map[string]bool{"ready":true})
 }
 
@@ -122,7 +126,9 @@ func (s *recordingStore) clip(w http.ResponseWriter,r *http.Request){
     if r.Method!="GET"&&r.Method!="HEAD"{w.WriteHeader(405);return}
     id:=r.URL.Query().Get("id");if !validRecordingID(id){w.WriteHeader(404);return}
     path:=filepath.Join(s.directory,id+".mp4")
-    info,err:=os.Lstat(path);if err!=nil||!info.Mode().IsRegular()||time.Since(info.ModTime())>24*time.Hour{w.WriteHeader(404);return}
+    ttl:=24*time.Hour
+    if item,ok:=s.find(id);ok&&item.Source=="sd"{path=filepath.Join(s.directory,"sd",id+".mp4");ttl=10*time.Minute}
+    info,err:=os.Lstat(path);if err!=nil||!info.Mode().IsRegular()||time.Since(info.ModTime())>ttl{w.WriteHeader(404);return}
     w.Header().Set("Content-Type","video/mp4")
     w.Header().Set("Cache-Control","private, no-store")
     http.ServeFile(w,r,path)
@@ -187,6 +193,7 @@ func decryptRecording(data,key,iv []byte)([]byte,error){
 }
 
 func (s *recordingStore) download(ctx context.Context,item Recording)error{
+    if item.Source=="sd"{return s.downloadSD(ctx,item)}
     if !s.prepareMu.TryLock(){return errors.New("recording_preparation_busy")};defer s.prepareMu.Unlock()
     if ctx.Err()!=nil{return ctx.Err()}
     if err:=os.MkdirAll(s.directory,0700);err!=nil{return err}
