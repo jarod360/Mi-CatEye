@@ -44,7 +44,7 @@ class MiSecurityCard extends HTMLElement {
       .tile.expanded{--popup-width:min(960px,calc(100vw - 24px),calc((100dvh - 140px) * var(--video-ratio,1.777778)));width:var(--popup-width);height:calc(var(--popup-width) / var(--video-ratio,1.777778) + 101px)}
       .flat-cover{display:block;width:100%;height:100%;max-width:220px;fill:var(--room-color);padding:12px 12px 0;opacity:.9}
       .tile{--room-color:#9570cd;background:var(--card-background-color,#fff);color:var(--room-color)}.tile[data-scene=balcony]{--room-color:#26a69a;background:var(--card-background-color,#fff);color:var(--room-color)}
-      :host([variant=classic]) .tile,:host([variant=classic]) .tile[data-scene=balcony]{background:var(--card-background-color,#fff);color:var(--room-color)}
+      :host([variant=classic]) .tile:not(.expanded){background:color-mix(in srgb,var(--room-color) 9%,var(--card-background-color,#fff));color:var(--room-color);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--room-color) 10%,transparent)}
       .quarter{position:absolute;left:0;bottom:0;width:100px;height:100px;border-radius:0 100% 0 0;background:color-mix(in srgb,var(--room-color) 22%,transparent)}.room-symbol{position:absolute;left:10px;bottom:0;--mdc-icon-size:66px;color:var(--room-color)}
       .label,:host([variant=classic]) .label{top:6px;bottom:auto;left:7px;background:color-mix(in srgb,var(--card-background-color,#fff) 85%,transparent);font-weight:500}
       :host([variant=arc]) .tile{--room-color:#9c8941}:host([variant=arc]) .tile[data-scene=balcony]{--room-color:#8f6baa}:host([variant=arc]) .quarter{width:84px;height:84px;background:color-mix(in srgb,var(--room-color) 13%,transparent)}:host([variant=arc]) .room-symbol{--mdc-icon-size:54px;left:12px;bottom:2px}
