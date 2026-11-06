@@ -25,7 +25,10 @@ class MiSecurityCard extends HTMLElement {
       const balcony='<path d="M60 15h82v57H60zm9 9v39h28V24zm37 0v39h27V24zM54 76h96v8H54zM22 77h28l-4 22H26z"/><path d="M34 80V43h5v37zM36 62C13 63 14 43 17 40c15 1 23 9 19 22zM38 52c0-18 11-24 22-22 1 13-5 24-22 22z"/>';
       return `<svg class="flat-cover" viewBox="0 0 180 110" aria-hidden="true">${kind==='dining'?dining:balcony}</svg>`;
     }
-    return `<span class="quarter" aria-hidden="true"></span><ha-icon class="room-symbol" icon="${kind==='dining'?'mdi:sofa':'mdi:window-open-variant'}" aria-hidden="true"></ha-icon>`;
+    const common='<path d="M0 110H240V140H0Z" fill="currentColor" opacity=".07"/><path d="M0 110H240M26 110V22H213V110" fill="none" stroke="currentColor" opacity=".18" stroke-width="2"/>';
+    const dining='<path d="M55 82H183L172 91H65Z" fill="currentColor" opacity=".32"/><path d="M74 91V118M164 91V118M44 75V105H58V120M193 75V105H179V120M120 23V40" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" opacity=".42"/><path d="M104 53L111 40H129L136 53Z" fill="currentColor" opacity=".45"/><ellipse cx="120" cy="75" rx="11" ry="3" fill="currentColor" opacity=".24"/>';
+    const balcony='<path d="M57 29H176V100H57ZM116 29V100M57 64H176" fill="none" stroke="currentColor" stroke-width="3" opacity=".32"/><path d="M35 103H54L51 121H38Z" fill="currentColor" opacity=".4"/><path d="M45 104V75M45 92Q26 90 30 78Q45 78 45 92M45 85Q60 81 57 69Q44 70 45 85" fill="none" stroke="currentColor" stroke-width="3" opacity=".48"/><path d="M190 39V91M185 46H201M185 65H201M185 84H201" stroke="currentColor" stroke-width="3" opacity=".25"/>';
+    return `<svg viewBox="0 0 240 140" aria-hidden="true">${common}${kind==='dining'?dining:balcony}</svg>`;
   }
   render() {
     this.shadowRoot.innerHTML = `<style>
@@ -45,6 +48,7 @@ class MiSecurityCard extends HTMLElement {
       .quarter{position:absolute;left:0;bottom:0;width:100px;height:100px;border-radius:0 100% 0 0;background:color-mix(in srgb,var(--room-color) 22%,transparent)}.room-symbol{position:absolute;left:10px;bottom:0;--mdc-icon-size:66px;color:var(--room-color)}
       .label,:host([variant=classic]) .label{top:6px;bottom:auto;left:7px;background:color-mix(in srgb,var(--card-background-color,#fff) 85%,transparent);font-weight:500}
       :host([variant=arc]) .tile{--room-color:#9c8941}:host([variant=arc]) .tile[data-scene=balcony]{--room-color:#8f6baa}:host([variant=arc]) .quarter{width:84px;height:84px;background:color-mix(in srgb,var(--room-color) 13%,transparent)}:host([variant=arc]) .room-symbol{--mdc-icon-size:54px;left:12px;bottom:2px}
+      :host([variant=arc]) .tile{background:color-mix(in srgb,var(--security-accent) 9%,var(--card-background-color,#fff));color:var(--security-accent)}:host([variant=arc]) .tile[data-scene=balcony]{background:color-mix(in srgb,#4e9e88 11%,var(--card-background-color,#fff));color:#438775}
       .expanded .label{top:7px;left:12px}.expanded .scene{overflow:hidden}
       </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
     this.setAttribute('variant',this.config.variant === 'arc'?'arc':'classic');
