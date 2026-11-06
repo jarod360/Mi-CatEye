@@ -20,7 +20,7 @@ class MiSecurityCard extends HTMLElement {
   }
   disconnectedCallback() { this.stop(); this.observer?.disconnect(); document.removeEventListener('visibilitychange',this.onVisibility); document.removeEventListener('keydown',this.onKey); }
   scene(kind) {
-    return `<span class="quarter" aria-hidden="true"></span><ha-icon class="room-symbol" icon="${kind==='dining'?'mdi:silverware-fork-knife':'mdi:hanger'}" aria-hidden="true"></ha-icon>`;
+    return `<span class="quarter" aria-hidden="true"></span><ha-icon class="room-symbol" icon="${kind==='dining'?'mdi:sofa':'mdi:window-open-variant'}" aria-hidden="true"></ha-icon>`;
   }
   render() {
     this.shadowRoot.innerHTML = `<style>
@@ -40,7 +40,7 @@ class MiSecurityCard extends HTMLElement {
       .label,:host([variant=classic]) .label{top:6px;bottom:auto;left:7px;background:color-mix(in srgb,var(--card-background-color,#fff) 85%,transparent);font-weight:500}
       :host([variant=arc]) .tile{--room-color:#9c8941}:host([variant=arc]) .tile[data-scene=balcony]{--room-color:#8f6baa}:host([variant=arc]) .quarter{width:84px;height:84px;background:color-mix(in srgb,var(--room-color) 13%,transparent)}:host([variant=arc]) .room-symbol{--mdc-icon-size:54px;left:12px;bottom:2px}
       .expanded .label{top:7px;left:12px}.expanded .scene{overflow:hidden}
-      </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="cat-recordings" hidden title="猫眼存储卡录像"><ha-icon icon="mdi:door-closed-lock"></ha-icon>门口录像</button><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
+      </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
     this.setAttribute('variant',this.config.variant === 'arc'?'arc':'classic');
     this.config.cameras.forEach((camera,index) => {
       const tile=document.createElement('section');tile.className='tile';tile.dataset.scene=camera.scene;
@@ -53,7 +53,6 @@ class MiSecurityCard extends HTMLElement {
       this.shadowRoot.querySelector('.grid').append(tile);
     });
     this.shadowRoot.querySelector('.play').onclick=()=>this.active.size?this.stop():this.play([0,1]);
-    const cat=this.shadowRoot.querySelector('.cat-recordings');cat.hidden=!/^\d{1,24}$/.test(this.config.cat_eye||'');cat.onclick=()=>this.openRecordings(this.config.cat_eye);
     this.shadowRoot.querySelector('.backdrop').onclick=()=>this.collapse();
   }
   tiles() { return [...this.shadowRoot.querySelectorAll('.tile')]; }
