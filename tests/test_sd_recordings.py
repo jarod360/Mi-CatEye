@@ -17,8 +17,8 @@ async def test_catalog_only_lists_configured_verified_models(hass):
     runtime(hass);conn=MagicMock()
     await recordings.ws_recordings_devices.__wrapped__(hass,conn,{"id":1})
     result=conn.send_result.call_args.args[1]
-    assert [r["device"] for r in result["devices"]]==["1","2","3"]
-    assert [r["source"] for r in result["devices"]]==["cloud","sd","sd"]
+    assert [r["device"] for r in result["devices"]]==["1","1","2","3"]
+    assert [r["source"] for r in result["devices"]]==["cloud","sd","sd","sd"]
 
 @pytest.mark.asyncio
 async def test_sd_list_binds_selected_device_and_filters_private_fields(hass,monkeypatch):
@@ -32,11 +32,19 @@ async def test_sd_list_binds_selected_device_and_filters_private_fields(hass,mon
     assert set(result["items"][0])=={"id","start","duration","event","source"}
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("device",["1","4","../private","999"])
+@pytest.mark.parametrize("device",["4","../private","999"])
 async def test_unverified_or_unknown_sd_device_never_reaches_backend(hass,monkeypatch,device):
     runtime(hass);conn=MagicMock();backend=AsyncMock();monkeypatch.setattr(recordings,"backend_request",backend)
     await recordings.ws_recordings_list.__wrapped__(hass,conn,{"id":1,"start":1793200000000,"end":1793286399999,"source":"sd","device":device})
     backend.assert_not_awaited();conn.send_error.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_cat_sd_reaches_only_entry_device(hass,monkeypatch):
+    runtime(hass);conn=MagicMock();backend=AsyncMock(return_value={"items":[]})
+    monkeypatch.setattr(recordings,"backend_request",backend)
+    await recordings.ws_recordings_list.__wrapped__(hass,conn,{"id":1,"start":1793200000000,"end":1793286399999,"source":"sd","device":"1"})
+    assert backend.call_args.args[3]["device"]=="1"
+    assert conn.send_result.call_args.args[1]["sd_supported"] is True
 
 @pytest.mark.asyncio
 async def test_busy_camera_message_is_actionable_without_private_error_text(hass,monkeypatch):

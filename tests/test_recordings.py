@@ -47,6 +47,6 @@ async def test_unsupported_sd_request_never_opens_a_session(hass, monkeypatch):
     backend = AsyncMock()
     monkeypatch.setattr(recordings, "backend_request", backend)
     conn = MagicMock()
-    await ws_recordings_list.__wrapped__(hass, conn, {"id": 1, "start": 1793200000000, "end": 1793286399999, "source": "sd"})
+    await ws_recordings_list.__wrapped__(hass, conn, {"id": 1, "start": 1793200000000, "end": 1793286399999, "source": "sd", "device":"999"})
     conn.send_error.assert_called_once()
     backend.assert_not_called()

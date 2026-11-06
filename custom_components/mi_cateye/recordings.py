@@ -26,7 +26,8 @@ SD_ERRORS = {"storage_device_busy": "该摄像机正在播放实时视频，请�
 @websocket_api.async_response
 async def ws_recordings_devices(hass, connection, message):
     runtime = runtime_for(hass)
-    devices = [{"device": runtime.entry.data["did"], "name": "猫眼 · 云端事件", "source": "cloud"}]
+    devices = [{"device": runtime.entry.data["did"], "name": "猫眼 · 云端事件", "source": "cloud"},
+               {"device": runtime.entry.data["did"], "name": "猫眼 · 存储卡", "source": "sd"}]
     devices += [{"device": did, "name": camera["name"] + " · 存储卡", "source": "sd"} for did, camera in runtime.cameras.items() if camera["model"] in SD_MODELS]
     connection.send_result(message["id"], {"devices": devices})
 
@@ -73,7 +74,7 @@ async def ws_recordings_list(hass, connection, message):
     device = message.get("device", runtime.entry.data["did"])
     if source == "sd":
         camera = runtime.cameras.get(device)
-        if not camera or camera["model"] not in SD_MODELS:
+        if device != runtime.entry.data["did"] and (not camera or camera["model"] not in SD_MODELS):
             connection.send_error(message["id"], "sd_unavailable", "该设备的存储卡回看尚未验证支持")
             return
     elif device != runtime.entry.data["did"]:

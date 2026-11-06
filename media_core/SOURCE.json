@@ -23,7 +23,10 @@
     "preset_replies",
     "validated_camera_sd_playback",
     "exclusive_live_sd_device_gate",
-    "bounded_sd_cache"
+    "bounded_sd_cache",
+    "cat_eye_sd_calendar_commands",
+    "cat_eye_live_preempts_sd",
+    "playback_frame_filter"
   ],
   "runtime_patch": "runtime.patch"
 }

@@ -41,38 +41,67 @@ index 0000000..0f781c2
 + s.producers=append(s.producers,&Producer{conn:original,state:stateStart})
 + if _,e:=s.ActiveProducer();e==nil{t.Fatal("ambiguous sources accepted")}
 +}
+diff --git a/internal/xiaomi/cat_storage_test.go b/internal/xiaomi/cat_storage_test.go
+new file mode 100644
+index 0000000..c28e8b9
+--- /dev/null
++++ b/internal/xiaomi/cat_storage_test.go
+@@ -0,0 +1,13 @@
++package xiaomi
++import("context";"testing";"time";"github.com/AlexxIT/go2rtc/pkg/core";"github.com/AlexxIT/go2rtc/pkg/xiaomi/miss")
++func TestCatLivePreemptsStorageWithoutParallelLease(t *testing.T){
++ g:=&storageAccess{};g.Lock();ctx,cancel:=context.WithCancel(context.Background());g.setCancel(cancel)
++ released:=make(chan struct{});go func(){<-ctx.Done();g.setCancel(nil);g.Unlock();close(released)}()
++ if !g.liveLease(true){t.Fatal("doorbell live did not preempt SD")};defer g.RUnlock()
++ select{case <-released:case <-time.After(time.Second):t.Fatal("SD did not release")}
++ if g.TryLock(){g.Unlock();t.Fatal("parallel SD writer acquired while live")}
++}
++func TestCatStorageWrapperRetainsTalkProducer(t *testing.T){
++ original:=&miss.Producer{};var p core.Producer=&storageProducer{Producer:original,release:func(){}}
++ if leased,ok:=p.(*storageProducer);ok{p=leased.Producer};camera,ok:=p.(*miss.Producer);if !ok||camera!=original{t.Fatal("talk cannot use existing cat connection")}
++}
 diff --git a/internal/xiaomi/cateye_sd_recordings.go b/internal/xiaomi/cateye_sd_recordings.go
 new file mode 100644
-index 0000000..1203d92
+index 0000000..9ee30bc
 --- /dev/null
 +++ b/internal/xiaomi/cateye_sd_recordings.go
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,80 @@
 +// On-demand SD reads for the two individually validated camera models.
 +package xiaomi
 +import("context";"crypto/sha256";"encoding/hex";"encoding/json";"errors";"net/http";"net/url";"os";"os/exec";"path/filepath";"regexp";"sort";"strconv";"time";"github.com/AlexxIT/go2rtc/internal/streams";"github.com/AlexxIT/go2rtc/pkg/xiaomi/miss")
 +func selectedSDSource(device string)(*url.URL,error){
 + if !regexp.MustCompile(`^[0-9]{1,24}$`).MatchString(device){return nil,errors.New("sd_not_supported")}
-+ stream:=streams.Get("camera_"+device);if stream==nil{return nil,errors.New("sd_not_supported")}
++ stream:=streams.Get("camera_"+device);doorbell:=stream==nil;if doorbell{stream=streams.Get("doorbell_live")};if stream==nil{return nil,errors.New("sd_not_supported")}
 + sources:=stream.Sources();if len(sources)!=1{return nil,errors.New("sd_not_supported")}
-+ source,e:=url.Parse(sources[0]);if e!=nil||source.Scheme!="xiaomi"||source.User==nil||source.Query().Get("did")!=device||!sdModel(source.Query().Get("model")){return nil,errors.New("sd_not_supported")};return source,nil
++ source,e:=url.Parse(sources[0]);if e!=nil||source.Scheme!="xiaomi"||source.User==nil||source.Query().Get("did")!=device||!sdModel(source.Query().Get("model"))||(!doorbell&&source.Query().Get("model")=="loock.cateye.v02"){return nil,errors.New("sd_not_supported")};return source,nil
 +}
 +func openSDReader(ctx context.Context,source *url.URL)(*miss.Client,func(),error){
 + gate:=storageGate(source);if !gate.TryLock(){return nil,nil,errors.New("storage_device_busy")}
-+ release:=func(){gate.Unlock()};copyURL:=*source
++ ctx,cancel:=context.WithCancel(ctx);gate.setCancel(cancel)
++ release:=func(){cancel();gate.setCancel(nil);gate.Unlock()};copyURL:=*source
 + resolved,e:=getCameraURL(&copyURL);if e!=nil{release();return nil,nil,errors.New("sd_index_failed")}
++ if ctx.Err()!=nil{release();return nil,nil,errors.New("storage_device_busy")}
 + target,e:=url.Parse(resolved);if e!=nil||(target.Query().Get("vendor")!="cs2"&&target.Query().Get("vendor")!="tutk"){release();return nil,nil,errors.New("sd_not_supported")}
 + client,e:=miss.NewClient(resolved);if e!=nil{release();return nil,nil,errors.New("sd_index_failed")}
 + _=client.SetDeadline(time.Now().Add(38*time.Second))
-+ if channel,ok:=client.Conn.(interface{OpenSDChannel5()error});ok{if e=channel.OpenSDChannel5();e!=nil{client.Close();release();return nil,nil,errors.New("sd_index_failed")}}
++ cat:=source.Query().Get("model")=="loock.cateye.v02"
++ if channel,ok:=client.Conn.(interface{OpenSDChannel5()error});ok&&!cat{if e=channel.OpenSDChannel5();e!=nil{client.Close();release();return nil,nil,errors.New("sd_index_failed")}}
 + done:=make(chan struct{});go func(){select{case <-ctx.Done():client.Close();case <-done:}}()
-+ go func(){for{if _,_,e:=client.Conn.ReadCommand();e!=nil{return}}}()
++ if !cat{go func(){for{if _,_,e:=client.Conn.ReadCommand();e!=nil{return}}}()}
 + return client,func(){close(done);client.Close();release()},nil
 +}
 +func(s *recordingStore)listSD(w http.ResponseWriter,r *http.Request,start,end int64){
++ if start>=end||end-start>86400001{jsonReply(w,400,map[string]string{"error":"invalid_time_range"});return}
 + device:=r.URL.Query().Get("device");source,e:=selectedSDSource(device);if e!=nil{jsonReply(w,409,map[string]string{"error":"sd_not_supported"});return}
 + ctx,cancel:=context.WithTimeout(r.Context(),30*time.Second);defer cancel()
 + reader,closeReader,e:=openSDReader(ctx,source);if e!=nil{jsonReply(w,409,map[string]string{"error":e.Error()});return};defer closeReader()
-+ rows,e:=reader.ReadSDIndex();if e!=nil{jsonReply(w,502,map[string]string{"error":"sd_index_failed"});return}
++ var rows []miss.SDItem
++ if source.Query().Get("model")=="loock.cateye.v02"{
++  zone:=time.FixedZone("CST",8*3600);first,last:=time.UnixMilli(start).In(zone),time.UnixMilli(end-1).In(zone)
++  day:=time.Date(first.Year(),first.Month(),first.Day(),0,0,0,0,zone)
++  for count:=0;count<2;count++{var part []miss.SDItem;part,e=reader.ReadCatSDIndex(day);if e!=nil{break};rows=append(rows,part...);if day.Year()==last.Year()&&day.YearDay()==last.YearDay(){break};day=day.AddDate(0,0,1)}
++ }else{rows,e=reader.ReadSDIndex()}
++ if e!=nil{jsonReply(w,502,map[string]string{"error":"sd_index_failed"});return}
 + items:=make([]Recording,0)
 + for _,row:=range rows{
 +  at:=row.Start*1000;if at<start||at>=end||row.Duration<1||row.Duration>3600{continue}
@@ -92,8 +121,13 @@ index 0000000..1203d92
 + work,e:=os.MkdirTemp(directory,".prepare-");if e!=nil{return errors.New("sd_file_failed")};defer os.RemoveAll(work)
 + raw:=filepath.Join(work,"original.mp4");output:=filepath.Join(work,"clip.mp4")
 + reader,closeReader,e:=openSDReader(ctx,source);if e!=nil{return e}
-+ report,e:=reader.ProbeSDFile(miss.SDItem{Start:item.SDStart,Duration:int(item.Duration)},raw);closeReader()
-+ if e!=nil||report["stage"]!="recording_file_received"{return errors.New("sd_file_failed")}
++ if source.Query().Get("model")=="loock.cateye.v02"{
++  zone:=time.FixedZone("CST",8*3600);var rows []miss.SDItem;rows,e=reader.ReadCatSDIndex(time.Unix(item.SDStart,0).In(zone));found:=false
++  for _,row:=range rows{if row.Start==item.SDStart&&row.Duration==int(item.Duration){found=true;break}}
++  if e==nil&&!found{e=errors.New("sd_file_failed")};if e==nil{e=reader.ReadCatSDFile(miss.SDItem{Start:item.SDStart,Duration:int(item.Duration)},zone,raw)}
++ }else{var report map[string]any;report,e=reader.ProbeSDFile(miss.SDItem{Start:item.SDStart,Duration:int(item.Duration)},raw);if e==nil&&report["stage"]!="recording_file_received"{e=errors.New("sd_file_failed")}}
++ closeReader();if e!=nil{if source.Query().Get("model")=="loock.cateye.v02"{if b,err:=os.ReadFile(raw+".failure.json");err==nil&&len(b)<4096&&json.Valid(b){_ =os.WriteFile(filepath.Join(s.directory,"cat-read-failure.json"),b,0600)}};return errors.New("sd_file_failed")}
++ if source.Query().Get("model")=="loock.cateye.v02"{_ =os.Remove(filepath.Join(s.directory,"cat-read-failure.json"))}
 + // Inspect only codec names; all filenames, frames and diagnostics remain private.
 + probe:=exec.CommandContext(ctx,"ffprobe","-v","error","-show_entries","stream=codec_type,codec_name","-of","json",raw)
 + encoded,e:=probe.Output();if e!=nil||len(encoded)>16384{return errors.New("sd_conversion_failed")}
@@ -144,10 +178,10 @@ index 0000000..19e51aa
 +}
 diff --git a/internal/xiaomi/cateye_talk.go b/internal/xiaomi/cateye_talk.go
 new file mode 100644
-index 0000000..ff2f995
+index 0000000..6f900c4
 --- /dev/null
 +++ b/internal/xiaomi/cateye_talk.go
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,100 @@
 +package xiaomi
 +
 +import (
@@ -172,6 +206,7 @@ index 0000000..ff2f995
 + h:=&talkAPI{begin:func(ctx context.Context)(talkWriter,error){
 +  stream:=streams.Get("doorbell_live");if stream==nil{return nil,errors.New("live_video_required")}
 +  p,e:=stream.ActiveProducer();if e!=nil{return nil,e}
++  if leased,ok:=p.(*storageProducer);ok{p=leased.Producer}
 +  camera,ok:=p.(*miss.Producer);if !ok{return nil,errors.New("talk_source_unsupported")}
 +  return camera.BeginTalk(ctx)
 + }}
@@ -276,15 +311,22 @@ index 0000000..08c01bf
 +}
 diff --git a/internal/xiaomi/storage_gate.go b/internal/xiaomi/storage_gate.go
 new file mode 100644
-index 0000000..bba62e6
+index 0000000..d83c6b0
 --- /dev/null
 +++ b/internal/xiaomi/storage_gate.go
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,23 @@
 +package xiaomi
-+import("encoding/json";"errors";"net/url";"sync";"github.com/AlexxIT/go2rtc/pkg/core";device "github.com/AlexxIT/go2rtc/pkg/xiaomi")
++import("context";"encoding/json";"errors";"net/url";"sync";"time";"github.com/AlexxIT/go2rtc/pkg/core";device "github.com/AlexxIT/go2rtc/pkg/xiaomi")
 +var storageGates sync.Map
-+func sdModel(model string)bool{return model=="chuangmi.camera.ipc009"||model=="chuangmi.camera.ipc021"}
-+func storageGate(source *url.URL)*sync.RWMutex{key:=source.Host+"/"+source.Query().Get("did");value,_:=storageGates.LoadOrStore(key,&sync.RWMutex{});return value.(*sync.RWMutex)}
++func sdModel(model string)bool{return model=="chuangmi.camera.ipc009"||model=="chuangmi.camera.ipc021"||model=="loock.cateye.v02"}
++type storageAccess struct{sync.RWMutex;mu sync.Mutex;cancel context.CancelFunc}
++func(g *storageAccess)setCancel(cancel context.CancelFunc){g.mu.Lock();g.cancel=cancel;g.mu.Unlock()}
++func(g *storageAccess)liveLease(priority bool)bool{
++ if g.TryRLock(){return true};if !priority{return false}
++ g.mu.Lock();cancel:=g.cancel;g.mu.Unlock();if cancel==nil{return false};cancel()
++ until:=time.Now().Add(2*time.Second);for time.Now().Before(until){if g.TryRLock(){return true};time.Sleep(10*time.Millisecond)};return false
++}
++func storageGate(source *url.URL)*storageAccess{key:=source.Host+"/"+source.Query().Get("did");value,_:=storageGates.LoadOrStore(key,&storageAccess{});return value.(*storageAccess)}
 +type storageProducer struct{core.Producer;once sync.Once;stopOnce sync.Once;stopErr error;release func()}
 +func(p *storageProducer)done(){p.once.Do(p.release)}
 +func(p *storageProducer)Start()error{defer p.Stop();return p.Producer.Start()}
@@ -292,7 +334,7 @@ index 0000000..bba62e6
 +func(p *storageProducer)MarshalJSON()([]byte,error){return json.Marshal(p.Producer)}
 +func dialWithStorageLease(raw string)(core.Producer,error){
 + source,e:=url.Parse(raw);if e!=nil||!sdModel(source.Query().Get("model")){return device.Dial(raw)}
-+ gate:=storageGate(source);if !gate.TryRLock(){return nil,errors.New("storage_device_busy")}
++ gate:=storageGate(source);if !gate.liveLease(source.Query().Get("model")=="loock.cateye.v02"){return nil,errors.New("storage_device_busy")}
 + producer,e:=device.Dial(raw);if e!=nil{gate.RUnlock();return nil,e}
 + return &storageProducer{Producer:producer,release:gate.RUnlock},nil
 +}
@@ -587,6 +629,122 @@ index 0000000..35787ac
 + }
 + socket.fail=true
 + if c.WriteAudio(codecPCMA,audio)==nil||c.audioSeq!=3{t.Fatal("failure was hidden or advanced sequence")}
++}
+diff --git a/pkg/xiaomi/miss/cat_storage.go b/pkg/xiaomi/miss/cat_storage.go
+new file mode 100644
+index 0000000..68745b1
+--- /dev/null
++++ b/pkg/xiaomi/miss/cat_storage.go
+@@ -0,0 +1,80 @@
++package miss
++
++import (
++ "bytes"
++ "encoding/binary"
++ "encoding/json"
++ "errors"
++ "os"
++ "time"
++ "github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
++)
++
++const catFileLimit=16*1024*1024
++
++// The validated Chinese cat-eye firmware uses local calendar fields. Caller
++// supplies the timezone explicitly; records themselves remain Unix timestamps.
++func catCalendar(at time.Time,full bool)[]byte{
++ p:=map[string]int{"year":at.Year(),"month":int(at.Month()),"day":at.Day()}
++ if full{p["hour"]=at.Hour();p["minute"]=at.Minute();p["second"]=at.Second()}
++ b,_:=json.Marshal(p);return b
++}
++func parseCatIndex(data []byte)([]SDItem,error){
++ if len(data)>sdIndexLimit||len(data)%8!=0{return nil,errors.New("sd_index_failed")}
++ rows:=make([]SDItem,0,len(data)/8)
++ for i:=0;i<len(data);i+=8{b:=data[i:i+8];start:=int64(binary.LittleEndian.Uint32(b));if start==0||b[4]==0||b[7]!=0{continue};rows=append(rows,SDItem{Start:start,Duration:int(b[4]),Marked:b[5]==1})}
++ return rows,nil
++}
++func(c *Client)catCommand()(uint32,[]byte,error){
++ cmd,b,e:=c.Conn.ReadCommand();if e!=nil{return 0,nil,e}
++ if cmd==cmdEncoded{b,e=crypto.Decode(b,c.key);if e!=nil||len(b)<4{return 0,nil,errors.New("sd_index_failed")};cmd=binary.BigEndian.Uint32(b);b=b[4:]}
++ return cmd,b,nil
++}
++func(c *Client)ReadCatSDIndex(day time.Time)([]SDItem,error){
++ if c.model!=ModelLoockV2{return nil,errors.New("sd_not_supported")}
++ _=c.SetDeadline(time.Now().Add(12*time.Second));defer c.SetDeadline(time.Time{})
++ if e:=c.WriteCommand(append(binary.BigEndian.AppendUint32(nil,0x206),catCalendar(day,false)...));e!=nil{return nil,e}
++ want:=-1;data:=[]byte{}
++ for n:=0;n<1024;n++{
++  cmd,b,e:=c.catCommand();if e!=nil{return nil,errors.New("sd_index_failed")}
++  switch cmd{
++  case 0x208:if len(b)<4{return nil,errors.New("sd_index_failed")};want=int(binary.LittleEndian.Uint32(b));if want<0||want>sdIndexLimit||want%8!=0{return nil,errors.New("sd_index_failed")}
++  case 0x207:if len(data)+len(b)>sdIndexLimit{return nil,errors.New("sd_index_failed")};data=append(data,b...)
++  case 0x20f:return nil,errors.New("sd_index_failed")
++  }
++  if want>=0&&len(data)>want{return nil,errors.New("sd_index_failed")};if want>=0&&len(data)==want{return parseCatIndex(data)}
++ }
++ return nil,errors.New("sd_index_failed")
++}
++
++func(c *Client)ReadCatSDFile(item SDItem,zone *time.Location,path string)error{
++ if c.model!=ModelLoockV2||item.Start<1262304000||item.Duration<1||item.Duration>3600||zone==nil{return errors.New("sd_not_supported")}
++ want:=-1;data:=[]byte{};ended:=0;counts:=map[uint32]int{};readErrors:=[]string{}
++ fail:=func(stage string)error{b,_:=json.Marshal(map[string]any{"stage":stage,"expected":want,"received":len(data),"readers_ended":ended,"commands":counts,"read_errors":readErrors});_ =os.WriteFile(path+".failure.json",b,0600);return errors.New("sd_file_failed")}
++ _=c.SetDeadline(time.Now().Add(32*time.Second));defer c.SetDeadline(time.Time{})
++ // File length is an IO-control response, but original MP4 bytes arrive as
++ // encrypted media chunks (the OEM JPEG callback), not normal control replies.
++ type event struct{cmd uint32;body []byte;err error}
++ events:=make(chan event,16);done:=make(chan struct{});defer close(done)
++ send:=func(ev event)bool{select{case events<-ev:return true;case <-done:return false}}
++ go func(){for{cmd,b,e:=c.catCommand();if e==nil&&cmd==0x201{continue};if !send(event{cmd,b,e})||e!=nil{return}}}()
++ // OEM isPlayback = (MISS flags >> 11) & 1. Ordinary video may still be
++ // emitted on this connection and must never be concatenated into an MP4.
++ go func(){for{p,e:=c.ReadPacket();if e!=nil{send(event{err:e});return};if p.Flags&(1<<11)==0{continue};if !send(event{cmd:0x201,body:p.Payload}){return}}}()
++ if e:=c.WriteCommand(append(binary.BigEndian.AppendUint32(nil,0x200),catCalendar(time.Unix(item.Start,0).In(zone),true)...));e!=nil{return fail("send_failed")}
++ timer:=time.NewTimer(32*time.Second);defer timer.Stop()
++ for n:=0;n<8192;n++{
++  var ev event;select{case ev=<-events:case <-timer.C:return fail("timeout")};if ev.err!=nil{ended++;text:=ev.err.Error();if len(text)>120{text="read_error"};readErrors=append(readErrors,text);if ended==2{return fail("readers_ended")};continue};counts[ev.cmd]++
++  switch ev.cmd{
++  case 0x202:if len(ev.body)<4{return fail("size_header")};want=int(binary.LittleEndian.Uint32(ev.body));if want<16||want>catFileLimit{return fail("size_limit")}
++  case 0x201:if len(data)+len(ev.body)>catFileLimit{return fail("content_limit")};data=append(data,ev.body...)
++  case 0x20f:return fail("device_error")
++  }
++  if want>0&&len(data)>want{return fail("length_overflow")}
++  if want>0&&len(data)==want{
++   if !bytes.Contains(data[:16],[]byte("ftyp")){return fail("format")}
++   if e:=os.WriteFile(path,data,0600);e!=nil{return fail("write_failed")};return nil
++  }
++ }
++ return fail("packet_limit")
++}
+diff --git a/pkg/xiaomi/miss/cat_storage_test.go b/pkg/xiaomi/miss/cat_storage_test.go
+new file mode 100644
+index 0000000..2c87804
+--- /dev/null
++++ b/pkg/xiaomi/miss/cat_storage_test.go
+@@ -0,0 +1,24 @@
++package miss
++import("encoding/binary";"encoding/json";"testing";"time";"io";"os";"path/filepath";"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto")
++func TestCatIndexRejectsDeletedRowsAndTruncatedInput(t *testing.T){
++ data:=make([]byte,24);for i:=0;i<3;i++{binary.LittleEndian.PutUint32(data[i*8:],1793872800+uint32(i*60));data[i*8+4]=6};data[7]=2;data[12]=0
++ rows,e:=parseCatIndex(data);if e!=nil||len(rows)!=1||rows[0].Duration!=6{t.Fatal("invalid or deleted row accepted",rows,e)}
++ if _,e=parseCatIndex(data[:23]);e==nil{t.Fatal("partial index accepted")}
++ if rows,e=parseCatIndex(nil);e!=nil||len(rows)!=0{t.Fatal("empty day rejected")}
++}
++
++type catEOFTestConn struct{Conn;control,media int;key []byte;raw []byte}
++func(c *catEOFTestConn)SetDeadline(time.Time)error{return nil}
++func(c *catEOFTestConn)WriteCommand(uint32,[]byte)error{return nil}
++func(c *catEOFTestConn)ReadCommand()(uint32,[]byte,error){c.control++;if c.control>1{return 0,nil,io.EOF};b:=binary.LittleEndian.AppendUint32(nil,uint32(len(c.raw)));return 0x202,b,nil}
++func(c *catEOFTestConn)ReadPacket()([]byte,[]byte,error){c.media++;if c.media>2{return nil,nil,io.EOF};time.Sleep(15*time.Millisecond);header:=make([]byte,32);binary.LittleEndian.PutUint32(header[4:],5);payload:=[]byte("ordinary live video must not be saved");if c.media==2{binary.LittleEndian.PutUint32(header[12:],1<<11);payload=c.raw};data,e:=crypto.Encode(payload,c.key);return header,data,e}
++func TestCatFileDrainsMediaWhenControlChannelEndsFirst(t *testing.T){
++ raw:=append([]byte{0,0,0,24,'f','t','y','p'},make([]byte,16)...);key:=make([]byte,32);conn:=&catEOFTestConn{key:key,raw:raw};c:=&Client{Conn:conn,key:key,model:ModelLoockV2};path:=filepath.Join(t.TempDir(),"clip.mp4")
++ if e:=c.ReadCatSDFile(SDItem{Start:1793872800,Duration:6},time.FixedZone("CST",28800),path);e!=nil{t.Fatal("queued media discarded after control EOF",e)}
++ got,e:=os.ReadFile(path);if e!=nil||string(got)!=string(raw){t.Fatal("complete media was not retained",e)}
++}
++func TestCatCalendarUsesDeviceLocalDateAcrossUTCMidnight(t *testing.T){
++ at:=time.Date(2026,11,5,16,1,2,0,time.UTC).In(time.FixedZone("CST",8*3600));var fields map[string]int
++ json.Unmarshal(catCalendar(at,true),&fields);if fields["day"]!=6||fields["hour"]!=0||fields["minute"]!=1||fields["second"]!=2{t.Fatal(fields)}
++ json.Unmarshal(catCalendar(at,false),&fields);var dateOnly map[string]int;json.Unmarshal(catCalendar(at,false),&dateOnly);if len(dateOnly)!=3||dateOnly["day"]!=6{t.Fatal(dateOnly)}
 +}
 diff --git a/pkg/xiaomi/miss/cateye_speaker_probe_test.go b/pkg/xiaomi/miss/cateye_speaker_probe_test.go
 new file mode 100644

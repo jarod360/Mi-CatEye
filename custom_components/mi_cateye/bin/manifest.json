@@ -1,10 +1,10 @@
 {
   "amd64": {
-    "filename": "mi-cateye-media-linux-amd64-0.2.0b5",
-    "sha256": "0629e6a9eeaa436ac2fd904f874145bf273ea0b9e58a0d99dca3c1bf26b51542"
+    "filename": "mi-cateye-media-linux-amd64-0.2.0b6",
+    "sha256": "46a1e1fc44c14af9e0ee678842430d5bccf3dd38a1aff482921b1549e47851f1"
   },
   "arm64": {
-    "filename": "mi-cateye-media-linux-arm64-0.2.0b5",
-    "sha256": "05d3b34178d6fd5d8d3c3cf0a7efea7d884b02cc18c4c7f1a266d535662a6bb8"
+    "filename": "mi-cateye-media-linux-arm64-0.2.0b6",
+    "sha256": "04665e0b4455884da9c58c8942ad27bf9c84cf69d2a7bdd26fefc55aa97ce321"
   }
 }

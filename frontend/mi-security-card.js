@@ -33,7 +33,11 @@ class MiSecurityCard extends HTMLElement {
       header{height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}h2{font:600 17px var(--paper-font-body1_-_font-family,system-ui);margin:0;display:flex;align-items:center;gap:7px}h2 ha-icon{--mdc-icon-size:21px;color:var(--security-accent)}button{font:inherit;cursor:pointer;border:0;color:inherit;background:transparent}button:focus-visible{outline:2px solid var(--security-accent);outline-offset:-3px}.play{display:flex;align-items:center;gap:5px;border-radius:18px;background:color-mix(in srgb,var(--security-accent) 12%,transparent);color:var(--security-accent);font-size:12px;padding:6px 11px;min-height:30px}.play ha-icon{--mdc-icon-size:17px}
       .grid{height:calc(100% - 38px);display:grid;grid-template-columns:1fr 1fr;gap:10px}.tile{position:relative;min-width:0;min-height:0;border-radius:12px;overflow:hidden;background:color-mix(in srgb,var(--security-accent) 9%,var(--card-background-color,#fff));color:var(--security-accent)}.tile[data-scene=balcony]{background:color-mix(in srgb,#4e9e88 11%,var(--card-background-color,#fff));color:#438775}.scene{position:absolute;inset:0;display:flex;justify-content:center;align-items:center;pointer-events:none}.scene svg{height:100%;width:100%;object-fit:contain}.label{position:absolute;left:10px;bottom:8px;border-radius:8px;padding:4px 7px;font:600 13px system-ui;background:color-mix(in srgb,var(--card-background-color,#fff) 85%,transparent);color:var(--primary-text-color,#222f55);pointer-events:none}.open{position:absolute;inset:0;width:100%;height:100%;z-index:2}.open ha-icon{position:absolute;right:8px;top:8px;--mdc-icon-size:18px;opacity:.7}.stream{position:absolute;inset:0;pointer-events:none}.stream iframe{border:0;width:100%;height:100%;display:block;background:#111}.status{position:absolute;right:8px;bottom:9px;z-index:3;font:11px system-ui;max-width:65%;background:#fffD;color:#333;border-radius:7px;padding:3px 5px;pointer-events:none}.status:empty{display:none}
       .backdrop{position:fixed;inset:0;z-index:1000;background:#0009}.tile.expanded{position:fixed;z-index:1001;width:min(960px,calc(100vw - 24px));height:min(640px,calc(100dvh - 40px));left:50%;top:50%;transform:translate(-50%,-50%);background:var(--card-background-color,#fff);border-radius:20px;display:flex;flex-direction:column;padding-bottom:56px;padding-top:45px}.expanded .scene,.expanded .stream{top:45px;bottom:56px}.expanded .stream iframe{object-fit:contain}.expanded .open{display:none}.expanded .label{top:7px;bottom:auto;left:12px;right:65px;background:transparent}.expanded .status{bottom:65px;right:12px}.popup-tools{display:none}.expanded .popup-tools{display:flex;position:absolute;bottom:0;left:0;right:0;height:56px;align-items:center;justify-content:flex-end;gap:10px;padding:8px 12px}.recordings{display:flex;align-items:center;gap:6px;background:var(--security-accent);color:white;border-radius:12px;padding:9px 13px;font:14px system-ui}.close{position:absolute;right:7px;top:3px;min-width:42px;min-height:38px}.recordings ha-icon{--mdc-icon-size:20px}[hidden]{display:none!important}@media(max-width:450px){ha-card{padding:10px 11px}.grid{gap:8px}.label{font-size:12px;left:5px;bottom:5px}.play{font-size:11px}}
-      </style><ha-card><header><h2><ha-icon icon="mdi:shield-home-outline"></ha-icon>安防</h2><button class="play" aria-label="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon><span>播放</span></button></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
+      :host([variant=classic]) h2 .header-icon{display:none}:host([variant=classic]) h2{font-weight:500;color:var(--primary-text-color,#212121)}:host([variant=classic]) .tile{background:var(--secondary-background-color,#f4f4f4);color:#87939d}:host([variant=classic]) .tile[data-scene=balcony]{background:var(--secondary-background-color,#f4f4f4);color:#8b9b91}:host([variant=classic]) .label{font-weight:500;background:var(--card-background-color,#fff);border-radius:6px}:host([variant=classic]) .scene svg{opacity:.85}
+      :host([variant=arc]) ha-card{padding:16px 18px}:host([variant=arc]) header{height:36px;margin-bottom:10px}:host([variant=arc]) h2{font-size:18px;color:var(--security-accent);gap:11px}:host([variant=arc]) .header-icon{display:flex;width:36px;height:36px;align-items:center;justify-content:center;border-radius:13px;background:#526ac420}:host([variant=arc]) .header-icon ha-icon{--mdc-icon-size:25px}:host([variant=arc]) .grid{height:calc(100% - 46px)}
+      .header-actions{display:flex;align-items:center;gap:8px}.cat-recordings{display:flex;align-items:center;gap:4px;padding:7px 8px;min-height:34px;border-radius:12px;color:var(--security-accent);background:color-mix(in srgb,var(--security-accent) 7%,transparent);font:12px system-ui}.cat-recordings ha-icon{--mdc-icon-size:17px}:host([variant=classic]) .cat-recordings{color:var(--secondary-text-color,#666);background:var(--secondary-background-color,#f1f1f1)}.play{width:34px;height:34px;min-height:34px;padding:0;justify-content:center;border-radius:50%;flex-shrink:0}.play ha-icon{--mdc-icon-size:22px}:host([variant=arc]) .play{width:36px;height:36px;background:#526ac412;border-radius:13px}:host([variant=classic]) .play{background:var(--secondary-background-color,#f1f1f1);color:var(--primary-text-color,#555)}
+      .tile.expanded{--popup-width:min(960px,calc(100vw - 24px),calc((100dvh - 140px) * var(--video-ratio,1.777778)));width:var(--popup-width);height:calc(var(--popup-width) / var(--video-ratio,1.777778) + 101px)}
+      </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="cat-recordings" hidden title="猫眼存储卡录像"><ha-icon icon="mdi:door-closed-lock"></ha-icon>门口录像</button><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
     this.setAttribute('variant',this.config.variant === 'arc'?'arc':'classic');
     this.config.cameras.forEach((camera,index) => {
       const tile=document.createElement('section');tile.className='tile';tile.dataset.scene=camera.scene;
@@ -46,6 +50,7 @@ class MiSecurityCard extends HTMLElement {
       this.shadowRoot.querySelector('.grid').append(tile);
     });
     this.shadowRoot.querySelector('.play').onclick=()=>this.active.size?this.stop():this.play([0,1]);
+    const cat=this.shadowRoot.querySelector('.cat-recordings');cat.hidden=!/^\d{1,24}$/.test(this.config.cat_eye||'');cat.onclick=()=>this.openRecordings(this.config.cat_eye);
     this.shadowRoot.querySelector('.backdrop').onclick=()=>this.collapse();
   }
   tiles() { return [...this.shadowRoot.querySelectorAll('.tile')]; }
@@ -61,14 +66,14 @@ class MiSecurityCard extends HTMLElement {
         const signed=await this._hass.callWS({type:'auth/sign_path',path,expires:300});
         if(seq!==this.sequence||!this.isConnected||!this.active.has(index))return;
         const frame=document.createElement('iframe');frame.title=this.config.cameras[index].name+'实时画面';frame.allow='autoplay';frame.src=signed.path;
-        frame.onload=()=>{if(seq===this.sequence)tile.querySelector('.status').textContent='';};
+        frame.onload=()=>{if(seq===this.sequence){tile.querySelector('.status').textContent='';const video=frame.contentDocument?.querySelector('video');if(video){const resize=()=>{if(video.videoWidth&&video.videoHeight)tile.style.setProperty('--video-ratio',String(video.videoWidth/video.videoHeight));};resize();video.addEventListener('loadedmetadata',resize,{once:true});}}};
         tile.querySelector('.stream').replaceChildren(frame);
       }catch(error){if(seq===this.sequence){this.active.delete(index);tile.querySelector('.status').textContent='连接失败，请重试';this.updateButton();}}
     }));
   }
   updateButton() {
     const b=this.shadowRoot.querySelector('.play');if(!b)return;
-    b.querySelector('span').textContent=this.active.size?'停止':'播放';b.ariaLabel=this.active.size?'停止摄像机':'播放两个摄像机';b.querySelector('ha-icon').setAttribute('icon',this.active.size?'mdi:stop':'mdi:play');
+    b.ariaLabel=this.active.size?'停止摄像机':'播放两个摄像机';b.title=b.ariaLabel;b.querySelector('ha-icon').setAttribute('icon',this.active.size?'mdi:stop':'mdi:play');
   }
   stop() {
     this.sequence++;this.active.clear();
@@ -91,8 +96,11 @@ class MiSecurityCard extends HTMLElement {
     this.tiles()[index]?.querySelector('.open').focus();
   }
   recordings(index) {
-    const device=this.config.cameras[index].device;this.collapse();this.stop();
-    history.pushState(null,'','/mi-cateye-recordings?device='+encodeURIComponent(device));window.dispatchEvent(new CustomEvent('location-changed'));
+    this.openRecordings(this.config.cameras[index].device);
+  }
+  openRecordings(device) {
+    this.collapse();this.stop();
+    history.pushState(null,'','/mi-cateye-recordings?device='+encodeURIComponent(device)+'&source=sd');window.dispatchEvent(new CustomEvent('location-changed'));
   }
 }
 if(!customElements.get('mi-security-card'))customElements.define('mi-security-card',MiSecurityCard);
