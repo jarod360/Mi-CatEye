@@ -71,35 +71,35 @@ class MiSecurityCard extends HTMLElement {
     this.shadowRoot.querySelector('.play').onclick=()=>this.active.size?this.stop():this.play([0,1]);
     this.shadowRoot.querySelector('.backdrop').onclick=()=>this.collapse();
   }
-  async readState(index){
-    const device=this.config.cameras[index].device,state=await this._hass.callWS({type:'mi_cateye/camera_state',device});
+  async readState(index,fresh=false){
+    const device=this.config.cameras[index].device,state=await this._hass.callWS({type:'mi_cateye/camera_state',device,fresh});
     if(this.isConnected&&this.config.cameras[index]?.device===device)this.applyState(index,state);return state;
   }
   applyState(index,state){
     this.cameraStates=this.cameraStates||{};this.cameraStates[index]=state;const tile=this.tiles()[index];if(!tile)return;
     tile.classList.toggle('is-private',state.enabled===false);const mark=tile.querySelector('.camera-mark');mark.classList.toggle('online',state.online===true);mark.classList.toggle('privacy-on',state.enabled===false);
     mark.title=state.online===false?'摄像机离线':state.online===true?(state.enabled===false?'摄像机在线 · 隐私模式':'摄像机在线'):'摄像机状态未知';
-    const button=tile.querySelector('.privacy');button.disabled=state.enabled===null;button.setAttribute('aria-checked',String(state.enabled===false));button.querySelector('span').textContent=(state.physical_privacy?'物理遮蔽':'隐私模式')+'：'+(state.enabled===null?'未知':state.enabled?'关':'开');
+    const button=tile.querySelector('.privacy');button.disabled=!!this.privacyBusy||!!this.preparing||state.enabled===null;button.setAttribute('aria-checked',String(state.enabled===false));button.querySelector('span').textContent=(state.physical_privacy?'物理遮蔽':'隐私模式')+'：'+(state.enabled===null?'未知':state.enabled?'关':'开');
   }
   async refreshStates(){
     if(!this._hass||this.refreshing)return;this.refreshing=true;try{await Promise.all(this.config.cameras.map(async(_,i)=>{try{await this.readState(i);}catch(e){this.applyState(i,{online:null,enabled:null});}}));}finally{this.refreshing=false;}
   }
   async setEnabled(index,enabled){
-    const device=this.config.cameras[index].device;const state=await this._hass.callWS({type:'mi_cateye/camera_state',device,enabled,confirmed:true});this.applyState(index,state);
-    if(state.enabled!==enabled)throw Error('摄像机状态尚未恢复');return state;
+    const status=this.tiles()[index].querySelector('.status');status.textContent=enabled?'正在唤醒，请稍等…':'正在进入隐私模式…';const device=this.config.cameras[index].device;const state=await this._hass.callWS({type:'mi_cateye/camera_state',device,enabled,confirmed:true});this.applyState(index,state);
+    if(state.enabled!==enabled)throw Error('摄像机状态尚未恢复');status.textContent='';return state;
   }
   async togglePrivacy(index){
-    const tile=this.tiles()[index],button=tile.querySelector('.privacy');if(button.disabled||this.privacyBusy)return;this.privacyBusy=true;button.disabled=true;
-    try{const state=await this.readState(index);if(state.enabled===null)throw Error('unknown');const enabled=!state.enabled,name=this.config.cameras[index].name;
-      if(!window.confirm(enabled?'是否唤醒'+name+'并播放？':'是否让'+name+'进入隐私模式并停止画面？'))return;
+    const tile=this.tiles()[index],button=tile.querySelector('.privacy');if(button.disabled||this.privacyBusy)return;this.privacyBusy=true;button.disabled=true;tile.querySelector('.status').textContent='正在读取状态…';
+    try{const state=await this.readState(index,true);if(state.enabled===null)throw Error('unknown');const enabled=!state.enabled,name=this.config.cameras[index].name;
+      if(!window.confirm(enabled?'是否唤醒'+name+'并播放？':'是否让'+name+'进入隐私模式并停止画面？')){tile.querySelector('.status').textContent='';return;}
       this.sequence++;this.active.delete(index);tile.querySelector('.stream').replaceChildren();this.updateButton();await this.setEnabled(index,enabled);if(enabled&&this.expanded===index)await this.play([index]);
-    }catch(e){tile.querySelector('.status').textContent='隐私模式设置失败，请核对米家状态';}finally{this.privacyBusy=false;button.disabled=this.cameraStates?.[index]?.enabled==null;}
+    }catch(e){tile.querySelector('.status').textContent='隐私模式设置失败，请核对米家状态';}finally{this.privacyBusy=false;for(const [i,state] of Object.entries(this.cameraStates||{}))this.applyState(Number(i),state);}
   }
   tiles() { return [...this.shadowRoot.querySelectorAll('.tile')]; }
   async play(indices) {
     if(!this._hass||this.preparing)return;
     const seq=this.sequence;this.preparing=true;
-    try{const allowed=[];for(const index of indices){const state=await this.readState(index);if(seq!==this.sequence||!this.isConnected)return;if(state.online===false){this.tiles()[index].querySelector('.status').textContent='设备离线';continue;}if(state.enabled===null)throw Error('隐私状态未知');if(state.enabled===false){const name=this.config.cameras[index].name;if(!window.confirm(name+'已处于隐私模式，是否唤醒并播放？'))continue;await this.setEnabled(index,true);if(seq!==this.sequence||!this.isConnected)return;}allowed.push(index);}indices=allowed;}catch(e){if(seq===this.sequence)indices.forEach(i=>this.tiles()[i].querySelector('.status').textContent='无法确认摄像机状态，请稍后重试');return;}finally{this.preparing=false;}
+    try{const allowed=[];for(const index of indices){const state=await this.readState(index,true);if(seq!==this.sequence||!this.isConnected)return;if(state.online===false){this.tiles()[index].querySelector('.status').textContent='设备离线';continue;}if(state.enabled===null)throw Error('隐私状态未知');if(state.enabled===false){const name=this.config.cameras[index].name;if(!window.confirm(name+'已处于隐私模式，是否唤醒并播放？'))continue;await this.setEnabled(index,true);if(seq!==this.sequence||!this.isConnected)return;}allowed.push(index);}indices=allowed;}catch(e){if(seq===this.sequence)indices.forEach(i=>this.tiles()[i].querySelector('.status').textContent='无法确认摄像机状态，请稍后重试');return;}finally{this.preparing=false;for(const [i,state] of Object.entries(this.cameraStates||{}))this.applyState(Number(i),state);}
     if(seq!==this.sequence||!this.isConnected)return;
     await Promise.all(indices.map(async index=>{
       if(this.active.has(index))return;

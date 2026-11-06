@@ -21,6 +21,32 @@ async def test_unselected_device_is_rejected_before_network():
     runtime.ensure_video.assert_not_awaited()
 
 @pytest.mark.asyncio
+async def test_delayed_property_is_polled_without_resending_write(monkeypatch):
+    import asyncio
+    runtime = SimpleNamespace(cameras={"2": {"model": "chuangmi.camera.ipc021"}}, ensure_video=AsyncMock())
+    backend = AsyncMock(side_effect=[{"online": True, "enabled": False},
+                                    {"online": True, "enabled": False},
+                                    {"online": True, "enabled": True}])
+    monkeypatch.setattr(camera_control, "backend_state", backend)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    result = await camera_control.camera_state(runtime, "2", True)
+    assert result["enabled"] is True
+    assert [c.args[2:] for c in backend.await_args_list] == [(True,), (), ()]
+    assert runtime.camera_status_cache["2"][1]["enabled"] is True
+
+@pytest.mark.asyncio
+async def test_unconfirmed_state_is_not_cached_as_success(monkeypatch):
+    import asyncio
+    runtime = SimpleNamespace(cameras={"2": {"model": "chuangmi.camera.ipc021"}}, ensure_video=AsyncMock())
+    backend = AsyncMock(return_value={"online": True, "enabled": False})
+    monkeypatch.setattr(camera_control, "backend_state", backend)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    with pytest.raises(ValueError, match="not_confirmed"):
+        await camera_control.camera_state(runtime, "2", True)
+    assert "2" not in runtime.camera_status_cache
+    assert sum(len(c.args) == 3 for c in backend.await_args_list) == 1
+
+@pytest.mark.asyncio
 async def test_status_cache_avoids_cloud_polling_but_write_invalidates():
     import time
     import asyncio
