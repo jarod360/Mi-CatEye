@@ -1,7 +1,8 @@
 class CatEyeRecordingsPanel extends HTMLElement {
-  constructor(){super();this.attachShadow({mode:'open'});this.items=[];this.generation=0;this.loaded=false;}
+  constructor(){super();this.attachShadow({mode:'open'});this.items=[];this.generation=0;this.loaded=false;this.onLocation=()=>{this.devices=null;this.stop();this.$('#device')?.replaceChildren();this.$('#list')?.replaceChildren();if(this.loading)this.reloadScope=true;else this.load(true);};}
   set hass(value){this._hass=value;if(this.isConnected&&!this.loaded)this.load();}
   connectedCallback(){
+    this.devices=null;window.addEventListener('location-changed',this.onLocation);
     this.shadowRoot.innerHTML=`<style>
       :host{display:block;box-sizing:border-box;min-height:100%;padding:16px;color:var(--primary-text-color,#fff);background:var(--primary-background-color,#10151d);font:15px system-ui}
       main{max-width:820px;margin:auto}header{display:flex;justify-content:space-between;align-items:center;gap:12px}h2{font-size:20px;margin:8px 0}button,input,select,a{font:inherit}button,a{min-height:42px;padding:8px 14px;border:0;border-radius:12px;cursor:pointer;background:var(--primary-color,#03a9f4);color:#fff;text-decoration:none;box-sizing:border-box}button:disabled{opacity:.5;cursor:default}.back{color:inherit;background:transparent}
@@ -23,15 +24,16 @@ class CatEyeRecordingsPanel extends HTMLElement {
     if(this._hass&&!this.loaded)this.load();
   }
   $(s){return this.shadowRoot.querySelector(s);}
-  disconnectedCallback(){this.stop();this.loaded=false;}
+  disconnectedCallback(){window.removeEventListener('location-changed',this.onLocation);this.stop();this.loaded=false;this.reloadScope=false;}
   stop(){this.generation++;const v=this.$('video');if(v){v.pause();v.removeAttribute('src');v.load();}const p=this.$('.player');if(p)p.hidden=true;}
   bounds(){const day=this.$('#day').value;if(!/^\d{4}-\d{2}-\d{2}$/.test(day))throw Error('请选择日期');const start=new Date(day+'T00:00:00').getTime(),end=new Date(day+'T23:59:59.999').getTime();return{start,end};}
   async load(force=false){
     if(!this._hass||!this.$('#day')||this.loading)return;
+    const requestScope=window.location.search;
     this.loaded=true;this.loading=true;this.stop();this.items=[];this.$('#list').replaceChildren();this.$('#day').disabled=true;this.$('#device').disabled=true;this.$('#query').disabled=true;this.$('#status').textContent='正在读取录像…';
-    try{if(!this.devices){const result=await this._hass.callWS({type:'mi_cateye/recordings_devices'});const scope=new URLSearchParams(window.location.search);this.devices=(result.devices||[]).filter(d=>(!scope.get('device')||d.device===scope.get('device'))&&(!scope.get('source')||d.source===scope.get('source')));this.devices.forEach((d,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=d.name;this.$('#device').append(option)});const wanted=new URLSearchParams(window.location.search).get('device');const at=this.devices.findIndex(d=>d.device===wanted&&(!new URLSearchParams(window.location.search).get('source')||d.source===new URLSearchParams(window.location.search).get('source')));if(at>=0)this.$('#device').value=String(at)}const selection=this.devices[Number(this.$('#device').value)];if(!selection)throw Error('没有可用录像设备');const {start,end}=this.bounds();const result=await this._hass.callWS({type:'mi_cateye/recordings_list',start,end,source:selection.source,device:selection.device});if(!this.isConnected)return;this.items=result.items||[];this.renderKinds();this.render();}
+    try{if(!this.devices){const result=await this._hass.callWS({type:'mi_cateye/recordings_devices'});if(requestScope!==window.location.search)return;const scope=new URLSearchParams(requestScope);const wantedDevice=scope.get('device')||(result.devices||[]).find(d=>d.source==='cloud')?.device;this.devices=(result.devices||[]).filter(d=>d.device===wantedDevice&&(!scope.get('source')||d.source===scope.get('source')));this.$('#device').replaceChildren();this.devices.forEach((d,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=d.name;this.$('#device').append(option)});const wanted=new URLSearchParams(window.location.search).get('device');const at=this.devices.findIndex(d=>d.device===wanted&&(!new URLSearchParams(window.location.search).get('source')||d.source===new URLSearchParams(window.location.search).get('source')));if(at>=0)this.$('#device').value=String(at)}const selection=this.devices[Number(this.$('#device').value)];if(!selection)throw Error('没有可用录像设备');const {start,end}=this.bounds();const result=await this._hass.callWS({type:'mi_cateye/recordings_list',start,end,source:selection.source,device:selection.device});if(!this.isConnected||requestScope!==window.location.search)return;this.items=result.items||[];this.renderKinds();this.render();}
     catch(e){this.items=[];this.$('#list').replaceChildren();this.$('#status').textContent=e?.message||'暂时无法读取录像，请稍后重试。';}
-    finally{this.loading=false;if(this.$('#device'))this.$('#device').disabled=false;if(this.$('#query'))this.$('#query').disabled=false;if(this.$('#day'))this.$('#day').disabled=false;}
+    finally{this.loading=false;if(this.$('#device'))this.$('#device').disabled=false;if(this.$('#query'))this.$('#query').disabled=false;if(this.$('#day'))this.$('#day').disabled=false;if(this.reloadScope&&this.isConnected){this.reloadScope=false;this.load(true);}}
   }
   eventLabel(event){
     if(event==='local')return '本地录像';
