@@ -9,16 +9,16 @@ class MiSecurityCard extends HTMLElement {
     if (!Array.isArray(config.cameras) || config.cameras.length !== 2 || config.cameras.some(c => !/^\d{1,24}$/.test(c.device) || !['dining','balcony'].includes(c.scene))) throw Error('Configure two supported cameras');
     this.stop(); this.config = structuredClone(config); if(this.isConnected) this.render();
   }
-  set hass(value) { this._hass = value; }
+  set hass(value) { this._hass = value; if(this.isConnected&&!this.stateTimer){this.refreshStates();this.stateTimer=setInterval(()=>{if(!document.hidden&&this.visible!==false)this.refreshStates();},60000);} }
   getCardSize() { return 3; }
   connectedCallback() {
     if(this.config) this.render();
     document.addEventListener('visibilitychange',this.onVisibility);
     document.addEventListener('keydown',this.onKey);
-    this.observer = new IntersectionObserver(rows => { if(rows.every(r => !r.isIntersecting)) this.stop(); });
+    this.observer = new IntersectionObserver(rows => { this.visible=rows.some(r=>r.isIntersecting);if(!this.visible)this.stop(); });
     this.observer.observe(this);
   }
-  disconnectedCallback() { this.stop(); this.observer?.disconnect(); document.removeEventListener('visibilitychange',this.onVisibility); document.removeEventListener('keydown',this.onKey); }
+  disconnectedCallback() { clearInterval(this.stateTimer);this.stateTimer=null;this.stop(); this.observer?.disconnect(); document.removeEventListener('visibilitychange',this.onVisibility); document.removeEventListener('keydown',this.onKey); }
   scene(kind) {
     if(this.config.variant!=='arc'){
       const dining='<path d="M34 54h112v12H34zM45 66h9v32h-9zM126 66h9v32h-9zM15 43h10v33h17v10H15zM155 43h10v43h-27V76h17zM20 86h8v12h-8zM152 86h8v12h-8z"/><path d="M87 8h6v14h-6zM77 22h26l10 18H67z"/><ellipse cx="90" cy="51" rx="12" ry="3" opacity=".3"/>';
@@ -49,27 +49,57 @@ class MiSecurityCard extends HTMLElement {
       .label,:host([variant=classic]) .label{top:6px;bottom:auto;left:7px;background:color-mix(in srgb,var(--card-background-color,#fff) 85%,transparent);font-weight:500}
       :host([variant=arc]) .tile{--room-color:#9c8941}:host([variant=arc]) .tile[data-scene=balcony]{--room-color:#8f6baa}:host([variant=arc]) .quarter{width:84px;height:84px;background:color-mix(in srgb,var(--room-color) 13%,transparent)}:host([variant=arc]) .room-symbol{--mdc-icon-size:54px;left:12px;bottom:2px}
       :host([variant=arc]) .tile{background:color-mix(in srgb,var(--security-accent) 9%,var(--card-background-color,#fff));color:var(--security-accent)}:host([variant=arc]) .tile[data-scene=balcony]{background:color-mix(in srgb,#4e9e88 11%,var(--card-background-color,#fff));color:#438775}
+      .popup-tools .privacy,.popup-tools .recordings{display:flex;align-items:center;justify-content:center;gap:6px;min-height:38px;padding:8px 12px;border-radius:18px;background:var(--secondary-background-color,#eee);color:var(--primary-text-color,#555);font:12px system-ui}.popup-tools ha-icon{--mdc-icon-size:18px}
+      .privacy-placeholder{display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:4px;color:var(--secondary-text-color,#8a8a8a);background:var(--secondary-background-color,#f2f2f2);font:12px system-ui;pointer-events:none}.privacy-placeholder ha-icon{--mdc-icon-size:30px}.is-private .privacy-placeholder{display:flex}.camera-mark.online.privacy-on{color:#ba8d41}
+      .camera-mark.online{color:#35a65c;opacity:1}.camera-mark.privacy-on{color:var(--secondary-text-color,#87909b);opacity:1}.camera-mark.privacy-on:after{content:"";position:absolute;left:0;top:9px;width:22px;height:2px;background:currentColor;transform:rotate(-45deg);box-shadow:0 0 0 1px var(--card-background-color,#fff)}.privacy{padding:8px 10px;border-radius:10px;background:var(--secondary-background-color,#eee);font-size:12px}.privacy[aria-checked=true]{color:var(--error-color,#b65a55)}.privacy:disabled{opacity:.5}.expanded .popup-tools{justify-content:space-between}
       .camera-mark{position:absolute;top:7px;right:8px;width:20px;height:20px;color:var(--secondary-text-color,#87909b);opacity:.65;pointer-events:none}.camera-mark svg{display:block;width:100%;height:100%}.expanded .camera-mark{display:none}
       .expanded .label{top:7px;left:12px}.expanded .scene{overflow:hidden}
       </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
     this.setAttribute('variant',this.config.variant === 'arc'?'arc':'classic');
     this.config.cameras.forEach((camera,index) => {
       const tile=document.createElement('section');tile.className='tile';tile.dataset.scene=camera.scene;
-      tile.innerHTML=`<div class="scene">${this.scene(camera.scene)}</div><div class="stream"></div><span class="camera-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v3H4zM5 10h14a7 7 0 0 1-14 0Z" fill="currentColor"/><circle cx="12" cy="13" r="2.5" fill="var(--card-background-color,#fff)"/><circle cx="12" cy="13" r="1.1" fill="currentColor"/></svg></span><div class="label"></div><button class="open"></button><span class="status" role="status"></span><div class="popup-tools"><button class="recordings"><ha-icon icon="mdi:filmstrip"></ha-icon>查看录像</button></div><button class="close" hidden aria-label="关闭画面">✕</button>`;
+      tile.innerHTML=`<div class="scene">${this.scene(camera.scene)}</div><div class="privacy-placeholder"><ha-icon icon="mdi:camera-off-outline"></ha-icon><span>隐私模式</span></div><div class="stream"></div><span class="camera-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v3H4zM5 10h14a7 7 0 0 1-14 0Z" fill="currentColor"/><circle cx="12" cy="13" r="2.5" fill="var(--card-background-color,#fff)"/><circle cx="12" cy="13" r="1.1" fill="currentColor"/></svg></span><div class="label"></div><button class="open"></button><span class="status" role="status"></span><div class="popup-tools"><button class="privacy" role="switch" aria-checked="false" disabled><ha-icon icon="mdi:camera-off-outline"></ha-icon><span>读取隐私状态…</span></button><button class="recordings"><ha-icon icon="mdi:filmstrip"></ha-icon>查看录像</button></div><button class="close" hidden aria-label="关闭画面">✕</button>`;
       tile.querySelector('.label').textContent=camera.name;
       tile.querySelector('.open').ariaLabel='查看'+camera.name;
       tile.querySelector('.open').onclick=()=>this.expand(index);
       tile.querySelector('.close').onclick=()=>this.collapse();
       tile.querySelector('.recordings').onclick=()=>this.recordings(index);
+      tile.querySelector('.privacy').onclick=()=>this.togglePrivacy(index);
       this.shadowRoot.querySelector('.grid').append(tile);
     });
     this.shadowRoot.querySelector('.play').onclick=()=>this.active.size?this.stop():this.play([0,1]);
     this.shadowRoot.querySelector('.backdrop').onclick=()=>this.collapse();
   }
+  async readState(index){
+    const device=this.config.cameras[index].device,state=await this._hass.callWS({type:'mi_cateye/camera_state',device});
+    if(this.isConnected&&this.config.cameras[index]?.device===device)this.applyState(index,state);return state;
+  }
+  applyState(index,state){
+    this.cameraStates=this.cameraStates||{};this.cameraStates[index]=state;const tile=this.tiles()[index];if(!tile)return;
+    tile.classList.toggle('is-private',state.enabled===false);tile.querySelector('.privacy-placeholder span').textContent=state.physical_privacy?'物理遮蔽已开启':'隐私模式已开启';const mark=tile.querySelector('.camera-mark');mark.classList.toggle('online',state.online===true);mark.classList.toggle('privacy-on',state.enabled===false);
+    mark.title=state.online===false?'摄像机离线':state.online===true?(state.enabled===false?'摄像机在线 · 隐私模式':'摄像机在线'):'摄像机状态未知';
+    const button=tile.querySelector('.privacy');button.disabled=state.enabled===null;button.setAttribute('aria-checked',String(state.enabled===false));button.querySelector('span').textContent=(state.physical_privacy?'物理遮蔽':'隐私模式')+'：'+(state.enabled===null?'未知':state.enabled?'关':'开');
+  }
+  async refreshStates(){
+    if(!this._hass||this.refreshing)return;this.refreshing=true;try{await Promise.all(this.config.cameras.map(async(_,i)=>{try{await this.readState(i);}catch(e){this.applyState(i,{online:null,enabled:null});}}));}finally{this.refreshing=false;}
+  }
+  async setEnabled(index,enabled){
+    const device=this.config.cameras[index].device;const state=await this._hass.callWS({type:'mi_cateye/camera_state',device,enabled,confirmed:true});this.applyState(index,state);
+    if(state.enabled!==enabled)throw Error('摄像机状态尚未恢复');return state;
+  }
+  async togglePrivacy(index){
+    const tile=this.tiles()[index],button=tile.querySelector('.privacy');if(button.disabled||this.privacyBusy)return;this.privacyBusy=true;button.disabled=true;
+    try{const state=await this.readState(index);if(state.enabled===null)throw Error('unknown');const enabled=!state.enabled,name=this.config.cameras[index].name;
+      if(!window.confirm(enabled?'是否唤醒'+name+'并播放？':'是否让'+name+'进入隐私模式并停止画面？'))return;
+      this.sequence++;this.active.delete(index);tile.querySelector('.stream').replaceChildren();this.updateButton();await this.setEnabled(index,enabled);if(enabled&&this.expanded===index)await this.play([index]);
+    }catch(e){tile.querySelector('.status').textContent='隐私模式设置失败，请核对米家状态';}finally{this.privacyBusy=false;button.disabled=this.cameraStates?.[index]?.enabled==null;}
+  }
   tiles() { return [...this.shadowRoot.querySelectorAll('.tile')]; }
   async play(indices) {
-    if(!this._hass)return;
-    const seq=this.sequence;
+    if(!this._hass||this.preparing)return;
+    const seq=this.sequence;this.preparing=true;
+    try{const allowed=[];for(const index of indices){const state=await this.readState(index);if(seq!==this.sequence||!this.isConnected)return;if(state.online===false){this.tiles()[index].querySelector('.status').textContent='设备离线';continue;}if(state.enabled===null)throw Error('隐私状态未知');if(state.enabled===false){const name=this.config.cameras[index].name;if(!window.confirm(name+'已处于隐私模式，是否唤醒并播放？'))continue;await this.setEnabled(index,true);if(seq!==this.sequence||!this.isConnected)return;}allowed.push(index);}indices=allowed;}catch(e){if(seq===this.sequence)indices.forEach(i=>this.tiles()[i].querySelector('.status').textContent='无法确认摄像机状态，请稍后重试');return;}finally{this.preparing=false;}
+    if(seq!==this.sequence||!this.isConnected)return;
     await Promise.all(indices.map(async index=>{
       if(this.active.has(index))return;
       this.active.add(index);this.updateButton();

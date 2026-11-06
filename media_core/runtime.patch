@@ -41,6 +41,86 @@ index 0000000..0f781c2
 + s.producers=append(s.producers,&Producer{conn:original,state:stateStart})
 + if _,e:=s.ActiveProducer();e==nil{t.Fatal("ambiguous sources accepted")}
 +}
+diff --git a/internal/xiaomi/camera_state.go b/internal/xiaomi/camera_state.go
+new file mode 100644
+index 0000000..7f66fb9
+--- /dev/null
++++ b/internal/xiaomi/camera_state.go
+@@ -0,0 +1,50 @@
++// Fixed selected-camera status and explicit privacy control; no video session.
++package xiaomi
++
++import (
++ "encoding/json"
++ "errors"
++ "net/http"
++ "net/url"
++ "sync"
++)
++
++type cameraState struct { Online *bool `json:"online"`; Enabled *bool `json:"enabled"` }
++var cameraCloudRequest = cloudUserRequest
++var cameraControlLocks sync.Map
++
++func readCameraState(source *url.URL)(cameraState,error){
++ result:=cameraState{};did:=source.Query().Get("did")
++ params,_:=json.Marshal(map[string]any{"dids":[]string{did},"limit":20})
++ raw,e:=cameraCloudRequest(source.User,"/v2/home/device_list_page",string(params));if e!=nil{return result,errors.New("camera_status_failed")}
++ var devices struct{List []struct{Did string `json:"did"`;Online *bool `json:"isOnline"`} `json:"list"`}
++ if json.Unmarshal(raw,&devices)!=nil{return result,errors.New("camera_status_failed")}
++ for _,device:=range devices.List{if device.Did==did{result.Online=device.Online}}
++ params,_=json.Marshal(map[string]any{"datasource":1,"params":[]map[string]any{{"did":did,"siid":2,"piid":1}}})
++ raw,e=cameraCloudRequest(source.User,"/miotspec/prop/get",string(params));if e!=nil{return result,nil}
++ var props []struct{Did string `json:"did"`;Siid int `json:"siid"`;Piid int `json:"piid"`;Code int `json:"code"`;Value *bool `json:"value"`}
++ if json.Unmarshal(raw,&props)!=nil{return result,nil}
++ for _,p:=range props{if p.Did==did&&p.Siid==2&&p.Piid==1&&p.Code==0{result.Enabled=p.Value}}
++ return result,nil
++}
++
++func writeCameraEnabled(source *url.URL,enabled bool)error{
++ did:=source.Query().Get("did");params,_:=json.Marshal(map[string]any{"params":[]map[string]any{{"did":did,"siid":2,"piid":1,"value":enabled}}})
++ raw,e:=cameraCloudRequest(source.User,"/miotspec/prop/set",string(params));if e!=nil{return errors.New("camera_control_failed")}
++ var replies []struct{Did string `json:"did"`;Siid int `json:"siid"`;Piid int `json:"piid"`;Code int `json:"code"`}
++ if json.Unmarshal(raw,&replies)!=nil||len(replies)!=1{return errors.New("camera_control_failed")};r:=replies[0]
++ if r.Did!=did||r.Siid!=2||r.Piid!=1||r.Code!=0{return errors.New("camera_control_failed")};return nil
++}
++
++func(s *recordingStore)cameraControl(w http.ResponseWriter,r *http.Request){
++ if r.Method!="GET"&&r.Method!="POST"{w.WriteHeader(http.StatusMethodNotAllowed);return}
++ source,e:=selectedSDSource(r.URL.Query().Get("device"));if e!=nil||source.Query().Get("model")=="loock.cateye.v02"{jsonReply(w,400,map[string]string{"error":"camera_not_selected"});return}
++ item,_:=cameraControlLocks.LoadOrStore(source.Query().Get("did"),&sync.Mutex{});lock:=item.(*sync.Mutex)
++ if !lock.TryLock(){jsonReply(w,409,map[string]string{"error":"camera_control_busy"});return};defer lock.Unlock()
++ if r.Method=="POST"{
++  var body struct{Enabled *bool `json:"enabled"`;Confirmed bool `json:"confirmed"`};decoder:=json.NewDecoder(http.MaxBytesReader(w,r.Body,128));decoder.DisallowUnknownFields()
++  if decoder.Decode(&body)!=nil||body.Enabled==nil||!body.Confirmed{jsonReply(w,400,map[string]string{"error":"camera_confirmation_required"});return}
++  if e=writeCameraEnabled(source,*body.Enabled);e!=nil{jsonReply(w,502,map[string]string{"error":"camera_control_failed"});return}
++ }
++ state,e:=readCameraState(source);if e!=nil{jsonReply(w,502,map[string]string{"error":"camera_status_failed"});return};jsonReply(w,200,state)
++}
+diff --git a/internal/xiaomi/camera_state_test.go b/internal/xiaomi/camera_state_test.go
+new file mode 100644
+index 0000000..9a11644
+--- /dev/null
++++ b/internal/xiaomi/camera_state_test.go
+@@ -0,0 +1,18 @@
++package xiaomi
++import("encoding/json";"net/url";"testing")
++func TestCameraStatusDoesNotTreatPrivacyAsOffline(t *testing.T){
++ old:=cameraCloudRequest;defer func(){cameraCloudRequest=old}();calls:=0
++ cameraCloudRequest=func(_ *url.Userinfo,path,params string)([]byte,error){calls++;if path=="/v2/home/device_list_page"{return []byte(`{"list":[{"did":"123","isOnline":true,"token":"secret"}]}`),nil};return []byte(`[{"did":"123","siid":2,"piid":1,"code":0,"value":false}]`),nil}
++ src,_:=url.Parse("xiaomi://user:cn@host?did=123");state,e:=readCameraState(src);if e!=nil||state.Online==nil||!*state.Online||state.Enabled==nil||*state.Enabled||calls!=2{t.Fatal(state,e,calls)}
++ raw,_:=json.Marshal(state);if string(raw)!=`{"online":true,"enabled":false}`{t.Fatal(string(raw))}
++}
++func TestCameraWriteRejectsMismatchedAcknowledgement(t *testing.T){
++ old:=cameraCloudRequest;defer func(){cameraCloudRequest=old}();src,_:=url.Parse("xiaomi://user:cn@host?did=123")
++ cameraCloudRequest=func(_ *url.Userinfo,path,params string)([]byte,error){if path!="/miotspec/prop/set"{t.Fatal(path)};return []byte(`[{"did":"456","siid":2,"piid":1,"code":0}]`),nil}
++ if writeCameraEnabled(src,true)==nil{t.Fatal("mismatched device accepted")}
++}
++func TestCameraUnknownStatusStaysUnknown(t *testing.T){
++ old:=cameraCloudRequest;defer func(){cameraCloudRequest=old}();src,_:=url.Parse("xiaomi://user:cn@host?did=123")
++ cameraCloudRequest=func(_ *url.Userinfo,path,params string)([]byte,error){if path=="/v2/home/device_list_page"{return []byte(`{"list":[]}`),nil};return []byte(`[{"did":"123","siid":2,"piid":1,"code":-1}]`),nil}
++ state,e:=readCameraState(src);if e!=nil||state.Online!=nil||state.Enabled!=nil{t.Fatal(state,e)}
++}
 diff --git a/internal/xiaomi/cat_storage_test.go b/internal/xiaomi/cat_storage_test.go
 new file mode 100644
 index 0000000..c28e8b9

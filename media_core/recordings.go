@@ -57,6 +57,7 @@ func InitRecordings() {
     store:=&recordingStore{source:source,directory:filepath.Join(filepath.Dir(app.ConfigPath),"recordings"),records:map[string]Recording{}}
     store.prune("")
     pruneSD(filepath.Join(store.directory,"sd"),"")
+    api.HandleFunc("api/doorbell/camera-state",store.cameraControl)
     api.HandleFunc("api/doorbell/recordings",store.list)
     api.HandleFunc("api/doorbell/recordings/prepare",store.prepare)
     api.HandleFunc("api/doorbell/recordings/clip",store.clip)
