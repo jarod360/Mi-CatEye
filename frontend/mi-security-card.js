@@ -49,12 +49,13 @@ class MiSecurityCard extends HTMLElement {
       .label,:host([variant=classic]) .label{top:6px;bottom:auto;left:7px;background:color-mix(in srgb,var(--card-background-color,#fff) 85%,transparent);font-weight:500}
       :host([variant=arc]) .tile{--room-color:#9c8941}:host([variant=arc]) .tile[data-scene=balcony]{--room-color:#8f6baa}:host([variant=arc]) .quarter{width:84px;height:84px;background:color-mix(in srgb,var(--room-color) 13%,transparent)}:host([variant=arc]) .room-symbol{--mdc-icon-size:54px;left:12px;bottom:2px}
       :host([variant=arc]) .tile{background:color-mix(in srgb,var(--security-accent) 9%,var(--card-background-color,#fff));color:var(--security-accent)}:host([variant=arc]) .tile[data-scene=balcony]{background:color-mix(in srgb,#4e9e88 11%,var(--card-background-color,#fff));color:#438775}
+      .camera-mark{position:absolute;top:7px;right:8px;width:20px;height:20px;color:var(--secondary-text-color,#87909b);opacity:.65;pointer-events:none}.camera-mark svg{display:block;width:100%;height:100%}.expanded .camera-mark{display:none}
       .expanded .label{top:7px;left:12px}.expanded .scene{overflow:hidden}
       </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
     this.setAttribute('variant',this.config.variant === 'arc'?'arc':'classic');
     this.config.cameras.forEach((camera,index) => {
       const tile=document.createElement('section');tile.className='tile';tile.dataset.scene=camera.scene;
-      tile.innerHTML=`<div class="scene">${this.scene(camera.scene)}</div><div class="stream"></div><div class="label"></div><button class="open"></button><span class="status" role="status"></span><div class="popup-tools"><button class="recordings"><ha-icon icon="mdi:filmstrip"></ha-icon>查看录像</button></div><button class="close" hidden aria-label="关闭画面">✕</button>`;
+      tile.innerHTML=`<div class="scene">${this.scene(camera.scene)}</div><div class="stream"></div><span class="camera-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v3H4zM5 10h14a7 7 0 0 1-14 0Z" fill="currentColor"/><circle cx="12" cy="13" r="2.5" fill="var(--card-background-color,#fff)"/><circle cx="12" cy="13" r="1.1" fill="currentColor"/></svg></span><div class="label"></div><button class="open"></button><span class="status" role="status"></span><div class="popup-tools"><button class="recordings"><ha-icon icon="mdi:filmstrip"></ha-icon>查看录像</button></div><button class="close" hidden aria-label="关闭画面">✕</button>`;
       tile.querySelector('.label').textContent=camera.name;
       tile.querySelector('.open').ariaLabel='查看'+camera.name;
       tile.querySelector('.open').onclick=()=>this.expand(index);
