@@ -6,7 +6,7 @@ class MiSecurityCard extends HTMLElement {
     this.onKey = e => { if(e.key === 'Escape') this.collapse(); };
   }
   setConfig(config) {
-    if (!Array.isArray(config.cameras) || config.cameras.length !== 2 || config.cameras.some(c => !/^\d{1,24}$/.test(c.device) || !['dining','balcony'].includes(c.scene))) throw Error('Configure two supported cameras');
+    if (!Array.isArray(config.cameras) || config.cameras.length !== (config.dialog_only===true?1:2) || config.cameras.some(c => !/^\d{1,24}$/.test(c.device) || !['dining','balcony'].includes(c.scene))) throw Error('Configure the supported cameras');
     this.stop(); this.cameraStates={}; this.config = structuredClone(config); if(this.isConnected) this.render();
   }
   set hass(value) { this._hass = value; if(this.isConnected&&!this.stateTimer){this.refreshStates();this.stateTimer=setInterval(()=>{if(!document.hidden&&this.visible!==false)this.refreshStates();},60000);} }
@@ -15,8 +15,10 @@ class MiSecurityCard extends HTMLElement {
     if(this.config) this.render();
     document.addEventListener('visibilitychange',this.onVisibility);
     document.addEventListener('keydown',this.onKey);
-    this.observer = new IntersectionObserver(rows => { this.visible=rows.some(r=>r.isIntersecting);if(!this.visible)this.stop(); });
-    this.observer.observe(this);
+    if(this.config?.dialog_only!==true){
+      this.observer = new IntersectionObserver(rows => { this.visible=rows.some(r=>r.isIntersecting);if(!this.visible)this.stop(); });
+      this.observer.observe(this);
+    }
   }
   disconnectedCallback() { clearInterval(this.stateTimer);this.stateTimer=null;this.stop(); this.observer?.disconnect(); document.removeEventListener('visibilitychange',this.onVisibility); document.removeEventListener('keydown',this.onKey); }
   scene(kind) {
@@ -55,10 +57,13 @@ class MiSecurityCard extends HTMLElement {
       .camera-mark{position:absolute;top:7px;right:8px;width:20px;height:20px;color:var(--secondary-text-color,#87909b);opacity:.65;pointer-events:none}.camera-mark svg{display:block;width:100%;height:100%}.expanded .camera-mark{display:none}
       :host([variant=classic]) .tile.expanded .label,:host([variant=arc]) .tile.expanded .label{background:transparent;padding:4px 0;border-radius:0}
       .expanded .label{top:7px;left:12px}.expanded .scene{overflow:hidden}
+      :host([dialog-only]) ha-card,:host([dialog-only]) .grid{display:contents}
+      :host([dialog-only]) header,:host([dialog-only]) .tile:not(.expanded){display:none}
       .ptz{position:absolute;left:10px;bottom:66px;z-index:4;display:grid;grid-template-columns:repeat(3,31px);grid-template-rows:repeat(2,31px);gap:3px}
       .ptz button{border-radius:50%;background:#65707a65;color:#fff;font-size:16px;padding:0}.ptz button:active{background:#8c929ba0}.ptz button:disabled{opacity:.48}
       .ptz [data-direction=up]{grid-column:2}.ptz [data-direction=left]{grid-row:2;grid-column:1}.ptz [data-direction=down]{grid-row:2;grid-column:2}.ptz [data-direction=right]{grid-row:2;grid-column:3}
       </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
+    this.toggleAttribute('dialog-only',this.config.dialog_only===true);
     this.setAttribute('variant',this.config.variant === 'arc'?'arc':'classic');
     this.config.cameras.forEach((camera,index) => {
       const tile=document.createElement('section');tile.className='tile';tile.dataset.scene=camera.scene;
@@ -154,6 +159,9 @@ class MiSecurityCard extends HTMLElement {
     this.tiles().forEach((tile,index)=>{delete tile.dataset.playing;this.updatePTZ(index);});
     this.updateButton();
   }
+  openCameraDialog() {
+    if(this.config.dialog_only===true)this.expand(0);
+  }
   expand(index) {
     this.collapse();this.overviewWasPlaying=this.active.size>0;this.expanded=index;
     const tile=this.tiles()[index];tile.classList.add('expanded');tile.setAttribute('role','dialog');tile.setAttribute('aria-modal','true');tile.setAttribute('aria-label',this.config.cameras[index].name);
@@ -166,6 +174,7 @@ class MiSecurityCard extends HTMLElement {
     this.tiles().forEach(t=>{t.classList.remove('expanded');t.removeAttribute('role');t.removeAttribute('aria-modal');t.querySelector('.close').hidden=true;});
     this.shadowRoot.querySelector('.backdrop').hidden=true;
     this.updatePTZ(index);if(!this.overviewWasPlaying)this.stop();
+    if(this.config.dialog_only===true){this.dispatchEvent(new CustomEvent('camera-dialog-closed'));return;}
     this.tiles()[index]?.querySelector('.open').focus();
   }
   recordings(index) {
@@ -173,7 +182,9 @@ class MiSecurityCard extends HTMLElement {
   }
   openRecordings(device) {
     this.collapse();this.stop();
-    history.pushState(null,'','/mi-cateye-recordings?device='+encodeURIComponent(device)+'&source=sd');window.dispatchEvent(new CustomEvent('location-changed'));
+    const params=new URLSearchParams({device,source:'sd'});
+    if(location.pathname.startsWith('/dashboard-'))params.set('return_to',this.config.return_to||location.pathname+location.search);
+    history.pushState(null,'','/mi-cateye-recordings?'+params);window.dispatchEvent(new CustomEvent('location-changed'));
   }
 }
 if(!customElements.get('mi-security-card'))customElements.define('mi-security-card',MiSecurityCard);

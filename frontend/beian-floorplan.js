@@ -7,18 +7,59 @@ const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const bad=s=>!s||['unknown','unavailable'].includes(s.state);
 class BeianFloorplan extends HTMLElement{
  constructor(){super();this.attachShadow({mode:'open'});this._selected='living';this._night=true;this._busy=new Set();this._zoom=1;this._filter='none';this._expanded=false;}
- setConfig(config){if(!Array.isArray(config.rooms)||!config.image)throw Error('需要配置 image 和 rooms');this._config=config;this._selected=config.rooms.some(r=>r.id===this._selected)?this._selected:config.rooms[0]?.id;this._render();}
- set hass(hass){this._hass=hass;this._update();}
+ setConfig(config){if(!Array.isArray(config.rooms)||!config.image)throw Error('需要配置 image 和 rooms');this._config=config;const returnedRoom=new URLSearchParams(location.search).get('beian_room');if(config.rooms.some(room=>room.id===returnedRoom))this._selected=returnedRoom;this._selected=config.rooms.some(r=>r.id===this._selected)?this._selected:config.rooms[0]?.id;this._render();}
+ set hass(hass){this._hass=hass;if(this._cameraDialog)this._cameraDialog.hass=hass;this._update();}
  getCardSize(){return 14;}
  getLayoutOptions(){return {grid_columns:12,grid_rows:12};}
  connectedCallback(){if(this._config&&!this.shadowRoot.querySelector('.app'))this._render();this._startClock();}
- disconnectedCallback(){this._cancelHold?.();clearInterval(this._clock);this._clock=null;}
+ disconnectedCallback(){this._cameraDialog?.remove();this._cameraDialog=null;this._cancelHold?.();clearInterval(this._clock);this._clock=null;}
  _startClock(){if(!this._clock)this._clock=setInterval(()=>{if(!document.hidden)this._updateTime()},30000);this._updateTime();}
  _state(id){return this._hass?.states?.[id];}
  _value(id,unit=''){const s=this._state(id);return bad(s)?'—':`${esc(s.state)}${unit}`;}
  _isOn(id){const s=this._state(id);if(bad(s))return false;if(id?.startsWith('cover.'))return s.state==='closed';return !['off','closed','idle','standby','not_home'].includes(s.state);}
  _more(id){if(!id)return;this.dispatchEvent(new CustomEvent('hass-more-info',{detail:{entityId:id},bubbles:true,composed:true}));}
- _navigate(path){if(!path?.startsWith('/')||path.startsWith('//'))return;history.pushState(null,'',path);window.dispatchEvent(new CustomEvent('location-changed'));}
+ _navigate(path,trigger){
+  if(!path?.startsWith('/')||path.startsWith('//'))return;
+  const target=new URL(path,location.origin);
+  if(target.origin!==location.origin)return;
+  const device=target.searchParams.get('device');
+  if(target.pathname==='/mi-cateye'&&/^\d{1,24}$/.test(device||'')){
+   for(const room of this._config.rooms){
+    const camera=(room.devices||[]).find(item=>item.kind==='camera'&&item.path===path);
+    if(camera&&['dining','balcony'].includes(room.id)){
+     this._openCamera({device,name:camera.name,scene:room.id},trigger);
+     return;
+    }
+   }
+  }
+  if(['/mi-cateye','/mi-cateye-recordings'].includes(target.pathname)&&location.pathname.startsWith('/dashboard-')){
+   target.searchParams.set('return_to',this._returnPath());
+  }
+  history.pushState(null,'',target.pathname+target.search+target.hash);
+  window.dispatchEvent(new CustomEvent('location-changed'));
+ }
+ _returnPath(){
+  const current=new URL(location.href);
+  if(this._selected)current.searchParams.set('beian_room',this._selected);
+  return current.pathname+current.search;
+ }
+ _openCamera(camera,trigger){
+  if(!customElements.get('mi-security-card')||!customElements.get('mi-security-card').prototype.openCameraDialog){
+   this._toast('安防卡资源尚未加载，请刷新页面');return;
+  }
+  this._cameraDialog?.remove();
+  const dialog=document.createElement('mi-security-card');
+  this._cameraDialog=dialog;
+  dialog.setConfig({dialog_only:true,variant:'classic',cameras:[camera],return_to:this._returnPath()});
+  dialog.addEventListener('camera-dialog-closed',()=>{
+   dialog.remove();
+   if(this._cameraDialog===dialog)this._cameraDialog=null;
+   if(trigger?.isConnected)trigger.focus();
+  },{once:true});
+  this.shadowRoot.append(dialog);
+  dialog.hass=this._hass;
+  dialog.openCameraDialog();
+ }
  _device(id){return this._config.rooms.flatMap(r=>r.devices||[]).find(d=>d.entity===id)}
  async _dryerAction(id,action){
   const d=this._device(id),command=d?.dryer_actions?.[action];if(!command||bad(this._state(id))||this._busy.has(id))return;
@@ -102,7 +143,7 @@ class BeianFloorplan extends HTMLElement{
   <div class="layout"><aside class="sidebar"><section class="glass clock"><div class="eyebrow">此 刻 · 在 家</div><div class="time">--:--</div><div class="date"></div><div class="lunar"></div></section><section class="glass weather"><div class="weather-icon">${icon('cloud')}</div><div><div class="weather-temp">—</div><div class="weather-label">天气</div></div></section><section class="glass metrics"><h3>家 的 状 态</h3><div class="metric"><span>${icon('temp')}室内温度</span><b class="inside-temp">—</b></div><div class="metric"><span>${icon('drop')}室内湿度</span><b class="inside-humidity">—</b></div><div class="metric"><span>${icon('bulb')}亮着的灯</span><b class="light-count">—</b></div></section><section class="glass quick"><h3>便 捷 入 口</h3><div class="quick-buttons"><button data-nav="/mi-cateye">${icon('camera')}门口画面</button><button data-nav="/mi-cateye-recordings">${icon('bell')}事件录像</button><button data-nav="/dashboard-home">${icon('home')}原有主页</button></div></section><div class="home-status"><div class="avatar">${icon('home')}</div><span class="presence">正在同步家庭状态</span></div></aside>
   <main class="stage"><div class="stage-top"><div><div class="stage-title">全屋实景</div><div class="stage-note">跟随家的每一处变化</div></div><div class="badge">${icon('bulb')}<span class="map-summary">设备状态</span></div></div><div class="filters" aria-label="设备类型">${[['none','隐藏图标'],['all','全部'],['light','灯光'],['curtain','窗帘'],['ac','空调'],['camera','摄像机'],['sensor','传感器'],['fan','排风'],['socket','插座'],['appliance','家电']].map(([key,name])=>`<button data-filter="${key}" class="${key==='all'?'active':''}">${name}</button>`).join('')}<div class="map-tools"><button data-zoom="-0.25" aria-label="缩小户型">−</button><span class="zoom-value">100%</span><button data-zoom="0.25" aria-label="放大户型">+</button><button class="expand-map" data-expand aria-label="全屏查看户型">${icon('full')}</button><button class="close-map" data-expand aria-label="退出全屏">${icon('close')}</button></div></div><div class="map-window"><div class="map"><img class="house" src="${esc(this._config.image)}" alt="北安家园立体户型：左侧餐厨、上方两间卧室与卫生间、右下客厅及阳台">${(this._config.light_layers||[]).map(layer=>`<img class="light-layer" data-light-layer="${esc(layer.id)}" src="${esc(layer.image)}" alt="" aria-hidden="true" style="left:${layer.position[0]}%;top:${layer.position[1]}%;width:${layer.size[0]}%;height:${layer.size[1]}%">`).join('')}<svg class="zones" viewBox="0 0 100 100" preserveAspectRatio="none">${this._config.rooms.map(r=>`<polygon class="zone" data-zone="${esc(r.id)}" points="${(r.polygon||[]).map(p=>p.join(',')).join(' ')}"/>`).join('')}</svg>${this._config.rooms.map(r=>`<div class="room-pin" style="left:${r.position[0]}%;top:${r.position[1]}%"><button class="room-label" data-room="${esc(r.id)}"><strong>${esc(r.name)}</strong><span data-temperature="${esc(r.id)}"></span></button></div>`).join('')}${this._config.rooms.flatMap(r=>(r.devices||[]).filter(d=>d.position&&!d.map_hidden).map(d=>`<div class="map-device" data-kind="${esc(d.kind)}" style="left:${d.position[0]}%;top:${d.position[1]}%"><button class="device-pin" ${d.path?`data-nav="${esc(d.path)}" data-state-entity="${esc(d.entity)}"`:`data-entity="${esc(d.entity)}"`} title="${esc(r.name+' · '+d.name)}" aria-label="${esc(r.name+' · '+d.name)}">${d.kind==='light'?`<span class="device-glyph" data-icon-entity="${esc(d.entity)}">${icon(this._deviceIcon(d))}</span>`:icon(d.icon||d.kind)}${d.kind==='sensor'?`<span class="pin-value" data-pin-value="${esc(d.entity)}"></span>`:''}</button><span class="pin-caption">${esc(r.name+' · '+d.name)}</span></div>`)).join('')}</div></div><nav class="room-nav" aria-label="选择房间">${this._config.rooms.map(r=>`<button data-room="${esc(r.id)}">${esc(r.name)}</button>`).join('')}</nav><section class="glass detail"><div class="detail-head"></div><div class="controls"></div></section><div class="hint"><span>点按控制 · 长按详情 · 支持筛选、放大和全屏</span><span>北安家园 · 立体实景</span></div></main></div><div class="toast" role="status" hidden></div></div></ha-card>`;
   this.shadowRoot.querySelector('.mode').setAttribute('aria-label','跟随日出日落');this.shadowRoot.querySelector('.mode').title='跟随日出日落';this.shadowRoot.querySelector('.mode').onclick=()=>this._syncSun();this._bindHold();
-  this.shadowRoot.addEventListener('click',this._clickHandler??=(e)=>{const pressed=e.target.closest('button');if(this._heldEntity&&Date.now()<this._suppressClickUntil&&[pressed?.dataset.entity,pressed?.dataset.stateEntity,pressed?.dataset.details,pressed?.dataset.dryerEntity].includes(this._heldEntity)){e.preventDefault();this._heldEntity=null;return}const dryer=e.target.closest('[data-dryer]');if(dryer){this._dryerAction(dryer.dataset.dryerEntity,dryer.dataset.dryer);return}const filter=e.target.closest('[data-filter]');if(filter){this._filter=filter.dataset.filter;this._applyFilter();return}const room=e.target.closest('[data-room]');if(room){this._selected=room.dataset.room;this._update();return}const more=e.target.closest('[data-more]');if(more){this._more(more.dataset.more);return}const nav=e.target.closest('[data-nav]');if(nav){this._navigate(nav.dataset.nav);return}const entity=e.target.closest('[data-entity]');if(entity)this._action(entity.dataset.entity)});
+  this.shadowRoot.addEventListener('click',this._clickHandler??=(e)=>{const pressed=e.target.closest('button');if(this._heldEntity&&Date.now()<this._suppressClickUntil&&[pressed?.dataset.entity,pressed?.dataset.stateEntity,pressed?.dataset.details,pressed?.dataset.dryerEntity].includes(this._heldEntity)){e.preventDefault();this._heldEntity=null;return}const dryer=e.target.closest('[data-dryer]');if(dryer){this._dryerAction(dryer.dataset.dryerEntity,dryer.dataset.dryer);return}const filter=e.target.closest('[data-filter]');if(filter){this._filter=filter.dataset.filter;this._applyFilter();return}const room=e.target.closest('[data-room]');if(room){this._selected=room.dataset.room;this._update();return}const more=e.target.closest('[data-more]');if(more){this._more(more.dataset.more);return}const nav=e.target.closest('[data-nav]');if(nav){this._navigate(nav.dataset.nav,nav);return}const entity=e.target.closest('[data-entity]');if(entity)this._action(entity.dataset.entity)});
   this.shadowRoot.querySelectorAll('[data-zoom]').forEach(b=>b.onclick=()=>this._zoomBy(Number(b.dataset.zoom)));
   this.shadowRoot.querySelectorAll('[data-expand]').forEach(b=>b.onclick=()=>{this._expanded=!this._expanded;this.shadowRoot.querySelector('.app').classList.toggle('expanded',this._expanded);if(this._expanded){if(this.requestFullscreen)this.requestFullscreen().catch(()=>{});this._zoomBy(0);const view=this.shadowRoot.querySelector('.map-window');view.scrollLeft=(view.scrollWidth-view.clientWidth)/2;}else{if(document.fullscreenElement===this)document.exitFullscreen().catch(()=>{});this._zoom=1;this.shadowRoot.querySelector('.map-window').classList.remove('map-zoomed');this.shadowRoot.querySelector('.map').style.width='100%';this.shadowRoot.querySelector('.zoom-value').textContent='100%';}});
   this.onfullscreenchange=()=>{if(!document.fullscreenElement&&this._expanded){this._expanded=false;this.shadowRoot.querySelector('.app').classList.remove('expanded');this._zoom=1;this.shadowRoot.querySelector('.map-window').classList.remove('map-zoomed');this.shadowRoot.querySelector('.map').style.width='100%';this.shadowRoot.querySelector('.zoom-value').textContent='100%'}};const assetSequence=this._assetSequence=(this._assetSequence||0)+1;Promise.all([...this.shadowRoot.querySelectorAll('.map img')].map(img=>img.decode())).then(()=>{if(this._assetSequence!==assetSequence)return;this.shadowRoot.querySelector('.map')?.classList.add('assets-ready');this._update()}).catch(()=>{if(this._assetSequence===assetSequence)this._toast('户型图片加载未完成，请重新加载页面')});this._startClock();this._update();this._applyFilter();

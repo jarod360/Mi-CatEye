@@ -7,3 +7,5 @@
 `sun: sun.sun` 随日出、日落切换浅色/深色。设备长按约 600ms 打开详情，移动取消长按，抬手不触发开关。房间可配置 `recordings_path`，如猫眼 `/mi-cateye-recordings?device=YOUR_DID&source=sd`。个人实体与图像应留在本地。
 
 验证包含手机与桌面布局、不同缩放下图标居中、日夜切换、长按抑制误操作及录像入口。功能验证使用服务调用替身，没有实际开关电器。
+
+餐厅与阳台摄像机沿用房间入口。设备配置的 `kind: camera` 和 `path: /mi-cateye?device=YOUR_DID` 会打开安防卡单摄像机弹窗，提供隐私、存储卡录像和四向云台。北安需要同时加载 `beian-floorplan.js` 与 `mi-security-card.js` 两个 Lovelace module。关闭直播保留当前看板，关闭录像或门口画面回到来源看板和房间。

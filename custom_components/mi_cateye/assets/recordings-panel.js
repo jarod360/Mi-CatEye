@@ -18,7 +18,9 @@ class CatEyeRecordingsPanel extends HTMLElement {
     this.$('#device').onchange=()=>this.load(true);
     this.$('#query').onclick=()=>this.load(true);this.$('#day').onchange=()=>this.load(true);
     this.$('#kind').onchange=()=>{this.stop();this.render();};this.$('#from').onchange=()=>{this.stop();this.render();};this.$('#to').onchange=()=>{this.stop();this.render();};
-    this.$('#back').onclick=()=>{this.stop();history.replaceState(null,'','/');window.dispatchEvent(new CustomEvent('location-changed'));};
+    this.$('#back').onclick=()=>{this.stop();const back=new URLSearchParams(location.search).get('return_to')||'';
+      const allowed=/^\/dashboard-[a-z0-9-]+(?:[/?]|$)/i.test(back)&&!back.includes('\\');
+      history.replaceState(null,'',allowed?back:'/');window.dispatchEvent(new CustomEvent('location-changed'));};
     this.$('#stop').onclick=()=>this.stop();this.$('#previous').onclick=()=>this.play(this.index+1);this.$('#next').onclick=()=>this.play(this.index-1);
     this.$('video').onerror=()=>{this.$('#status').textContent='当前设备无法播放这段录像，可以下载后查看，或选择其它片段。';};
     if(this._hass&&!this.loaded)this.load();

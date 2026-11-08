@@ -29,7 +29,9 @@ class DoorbellPhonePanel extends HTMLElement {
     this.shadowRoot.querySelector('#reply-send').onclick=()=>this.sendReply();
     this.shadowRoot.querySelector('#close').onclick=()=>{
       this.shadowRoot.querySelector('iframe').src='about:blank';
-      history.replaceState(null,'','/');window.dispatchEvent(new CustomEvent('location-changed'));
+      const back=new URLSearchParams(location.search).get('return_to')||'';
+      const allowed=/^\/dashboard-[a-z0-9-]+(?:[/?]|$)/i.test(back)&&!back.includes('\\');
+      history.replaceState(null,'',allowed?back:'/');window.dispatchEvent(new CustomEvent('location-changed'));
     };
     this.shadowRoot.querySelector('#retry').onclick=()=>{this.started=false;this.open();};
     if(this._hass&&!this.started)this.open();

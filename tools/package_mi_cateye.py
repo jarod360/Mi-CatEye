@@ -109,6 +109,8 @@ def main():
     (staging / "frontend").mkdir()
     shutil.copyfile(ROOT / "frontend/mi-security-card.js", staging / "frontend/mi-security-card.js")
     shutil.copyfile(ROOT / "docs/security-card.md", staging / "frontend/SECURITY-CARD.md")
+    shutil.copyfile(ROOT / "frontend/beian-floorplan.js", staging / "frontend/beian-floorplan.js")
+    shutil.copyfile(ROOT / "docs/beian-floorplan.md", staging / "frontend/BEIAN-FLOORPLAN.md")
     outputs = ROOT / "outputs"
     outputs.mkdir(exist_ok=True)
     archive = outputs / ("Mi-CatEye-" + version + ".zip")
