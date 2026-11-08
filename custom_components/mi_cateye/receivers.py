@@ -35,17 +35,20 @@ def talk_controls(runtime):
                         {"id": "doorbell-reply", "label": "语音回复", "dismissOnClick": False}]}
 
 
+async def receiver_state(runtime, endpoint):
+    try:
+        async with runtime.client.get(
+            endpoint + "/state", timeout=aiohttp.ClientTimeout(total=.6),
+        ) as response:
+            response.raise_for_status()
+            value = await response.json()
+            return value if isinstance(value, dict) else {}
+    except (aiohttp.ClientError, TimeoutError, ValueError):
+        return {}
+
+
 async def supports_talk(runtime, endpoint):
-    for attempt in range(2):
-        try:
-            async with runtime.client.get(endpoint + "/state", timeout=aiohttp.ClientTimeout(total=3)) as response:
-                response.raise_for_status()
-                value = await response.json()
-                return isinstance(value, dict) and value.get("doorbellTalk") is True
-        except (aiohttp.ClientError, TimeoutError, ValueError):
-            if attempt == 0:
-                await asyncio.sleep(.15)
-    return False
+    return (await receiver_state(runtime, endpoint)).get("doorbellTalk") is True
 
 
 async def show_tv(runtime):
@@ -71,25 +74,31 @@ async def show_xiaoai(runtime):
     await runtime.ensure_video()
     host = receiver_host(runtime.entry.options.get("xiaoai_host", ""))
     endpoint = f"http://{host}:7979"
-    talk_ready = await supports_talk(runtime, endpoint)
     runtime.xiaoai_generation = getattr(runtime, "xiaoai_generation", 0) + 1
     generation = runtime.xiaoai_generation
 
-    async def request(method, path, **kwargs):
-        async with runtime.client.request(method, endpoint + path, timeout=aiohttp.ClientTimeout(total=8), **kwargs) as response:
+    async def request(method, path, *, limit=8, **kwargs):
+        async with runtime.client.request(method, endpoint + path, timeout=aiohttp.ClientTimeout(total=limit), **kwargs) as response:
             response.raise_for_status()
             return await response.json() if method == "GET" else None
 
     async with runtime.xiaoai_lock:
         previous = None
         try:
-            previous = (await request("GET", "/volume")).get("level")
+            state = await receiver_state(runtime, endpoint)
+            talk_ready = state.get("doorbellTalk") is True
+            volume = state.get("volume")
+            previous = volume.get("level") if isinstance(volume, dict) else None
+            if type(previous) is not int or not 0 <= previous <= 100:
+                with suppress(aiohttp.ClientError, TimeoutError):
+                    previous = (await request("GET", "/volume", limit=.8)).get("level")
             if type(previous) is not int or not 0 <= previous <= 100:
                 previous = None
             if previous is not None and previous != 80:
                 await request("POST", "/volume?level=80&ui=false")
-            with suppress(aiohttp.ClientError, TimeoutError):
-                await request("POST", "/power?state=on")
+            if state.get("screenOn") is not True or state.get("dreaming") is not False:
+                with suppress(aiohttp.ClientError, TimeoutError):
+                    await request("POST", "/power?state=on", limit=1.0)
             payload = {
                 "id": "doorbell-shared-live", "duration": 60, "position": 0, "fullscreen": True,
                 "mediaFullBleed": True, "padding": 0, "borderWidth": 0, "cornerRadius": 0,

@@ -419,7 +419,7 @@ index 0000000..d83c6b0
 + return &storageProducer{Producer:producer,release:gate.RUnlock},nil
 +}
 diff --git a/internal/xiaomi/xiaomi.go b/internal/xiaomi/xiaomi.go
-index 1e57842..86c2597 100644
+index 1e57842..d5f0b5e 100644
 --- a/internal/xiaomi/xiaomi.go
 +++ b/internal/xiaomi/xiaomi.go
 @@ -44,7 +44,7 @@ func Init() {
@@ -431,7 +431,28 @@ index 1e57842..86c2597 100644
  	})
  
  	api.HandleFunc("api/xiaomi", apiXiaomi)
-@@ -311,6 +311,12 @@ func apiAuth(w http.ResponseWriter, r *http.Request) {
+@@ -93,6 +93,20 @@ func cloudUserRequest(user *url.Userinfo, apiURL, params string) ([]byte, error)
+ func getCameraURL(url *url.URL) (string, error) {
+ 	model := url.Query().Get("model")
+ 
++	// The v02 can wake while Xiaomi Cloud issues its MISS credentials.
++	// Wait for both requests before dialing the single media session.
++	if model == "loock.cateye.v02" {
++		wakeURL := *url
++		awake := make(chan struct{})
++		go func() {
++			defer close(awake)
++			_ = wakeUpCamera(&wakeURL)
++		}()
++		resolved, err := getMissURL(url)
++		<-awake
++		return resolved, err
++	}
++
+ 	// It is not known which models need to be awakened.
+ 	// Probably all the doorbells and all the battery cameras.
+ 	if strings.Contains(model, ".cateye.") {
+@@ -311,6 +325,12 @@ func apiAuth(w http.ResponseWriter, r *http.Request) {
  	var err error
  
  	switch {
@@ -445,10 +466,47 @@ index 1e57842..86c2597 100644
  		auth = xiaomi.NewCloud(AppXiaomiHome)
  		err = auth.Login(username, password)
 diff --git a/pkg/tutk/conn.go b/pkg/tutk/conn.go
-index e061069..d33afd4 100644
+index e061069..fbfa39f 100644
 --- a/pkg/tutk/conn.go
 +++ b/pkg/tutk/conn.go
-@@ -63,6 +63,17 @@ type Conn struct {
+@@ -10,6 +10,16 @@ import (
+ )
+ 
+ func Dial(host, uid, username, password string) (*Conn, error) {
++	return dial(host, uid, username, password, time.Second)
++}
++
++// DialWithLANRetry uses a shorter discovery and session-start retry interval
++// for callers that know their device responds well to it.
++func DialWithLANRetry(host, uid, username, password string, retry time.Duration) (*Conn, error) {
++	return dial(host, uid, username, password, retry)
++}
++
++func dial(host, uid, username, password string, retry time.Duration) (*Conn, error) {
+ 	addr, err := net.ResolveUDPAddr("udp", host)
+ 	if err != nil {
+ 		// Default port for listening incoming LAN connections.
+@@ -29,8 +39,9 @@ func Dial(host, uid, username, password string) (*Conn, error) {
+ 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+ 
+ 	if addr.Port != 10001 {
+-		err = c.connectDirect(uid, sid)
++		err = c.connectDirect(uid, sid, retry)
+ 	} else {
++		retry = time.Second
+ 		err = c.connectRemote(uid, sid)
+ 	}
+ 	if err != nil {
+@@ -44,7 +55,7 @@ func Dial(host, uid, username, password string) (*Conn, error) {
+ 		c.session = NewSession16(c, sid)
+ 	}
+ 
+-	if err = c.clientStart(username, password); err != nil {
++	if err = c.clientStart(username, password, retry); err != nil {
+ 		_ = c.Close()
+ 		return nil, err
+ 	}
+@@ -63,6 +74,17 @@ type Conn struct {
  	err    error
  	cmdMu  sync.Mutex
  	cmdAck func()
@@ -466,7 +524,7 @@ index e061069..d33afd4 100644
  }
  
  // Read overwrite net.Conn
-@@ -163,8 +174,9 @@ func (c *Conn) Error() error {
+@@ -163,8 +185,9 @@ func (c *Conn) Error() error {
  
  func (c *Conn) worker() {
  	defer c.session.Close()
@@ -477,7 +535,7 @@ index e061069..d33afd4 100644
  
  	for {
  		n, err := c.Read(buf)
-@@ -224,8 +236,12 @@ func (c *Conn) handleMsg(msg []byte) int {
+@@ -224,8 +247,12 @@ func (c *Conn) handleMsg(msg []byte) int {
  	// 28  0700      msg data (not all msg)
  	switch msg[8] {
  	case 0x08:
@@ -631,6 +689,70 @@ index 0000000..354667c
 + if c.receiveSDFrame(frame){t.Fatal("AV/control channel intercepted")}
 + if _,e:=c.ReadChannel(2);e==nil{t.Fatal("unexpected channel accepted")}
 +}
+diff --git a/pkg/tutk/session0.go b/pkg/tutk/session0.go
+index 6a1b225..9342979 100644
+--- a/pkg/tutk/session0.go
++++ b/pkg/tutk/session0.go
+@@ -7,9 +7,9 @@ import (
+ 	"time"
+ )
+ 
+-func (c *Conn) connectDirect(uid string, sid []byte) error {
++func (c *Conn) connectDirect(uid string, sid []byte, retry time.Duration) error {
+ 	res, err := writeAndWait(
+-		c, func(res []byte) bool { return bytes.Index(res, []byte("\x02\x06\x12\x00")) == 8 },
++		c, retry, func(res []byte) bool { return bytes.Index(res, []byte("\x02\x06\x12\x00")) == 8 },
+ 		ConnectByUID(stageBroadcast, uid, sid),
+ 	)
+ 	if err != nil {
+@@ -25,7 +25,7 @@ func (c *Conn) connectDirect(uid string, sid []byte) error {
+ 
+ func (c *Conn) connectRemote(uid string, sid []byte) error {
+ 	res, err := writeAndWait(
+-		c, func(res []byte) bool { return bytes.Index(res, []byte("\x01\x03\x43")) == 8 },
++		c, time.Second, func(res []byte) bool { return bytes.Index(res, []byte("\x01\x03\x43")) == 8 },
+ 		ConnectByUID(stageGetRemoteIP, uid, sid),
+ 	)
+ 	if err != nil {
+@@ -38,7 +38,7 @@ func (c *Conn) connectRemote(uid string, sid []byte) error {
+ 	c.addr.Port = int(binary.BigEndian.Uint16(res[38:]))
+ 
+ 	res, err = writeAndWait(
+-		c, func(res []byte) bool { return bytes.Index(res, []byte("\x04\x04\x33")) == 8 },
++		c, time.Second, func(res []byte) bool { return bytes.Index(res, []byte("\x04\x04\x33")) == 8 },
+ 		ConnectByUID(stageRemoteAck, uid, sid),
+ 	)
+ 	if err != nil {
+@@ -55,9 +55,9 @@ func (c *Conn) connectRemote(uid string, sid []byte) error {
+ 	return err
+ }
+ 
+-func (c *Conn) clientStart(username, password string) error {
++func (c *Conn) clientStart(username, password string, retry time.Duration) error {
+ 	_, err := writeAndWait(
+-		c, func(res []byte) bool {
++		c, retry, func(res []byte) bool {
+ 			return len(res) >= 84 && res[28] == 0 && (res[29] == 0x14 || res[29] == 0x21)
+ 		},
+ 		c.session.ClientStart(0, username, password),
+@@ -66,7 +66,7 @@ func (c *Conn) clientStart(username, password string) error {
+ 	return err
+ }
+ 
+-func writeAndWait(conn net.Conn, ok func(res []byte) bool, req ...[]byte) ([]byte, error) {
++func writeAndWait(conn net.Conn, retry time.Duration, ok func(res []byte) bool, req ...[]byte) ([]byte, error) {
+ 	var t *time.Timer
+ 	t = time.AfterFunc(1, func() {
+ 		for _, b := range req {
+@@ -75,7 +75,7 @@ func writeAndWait(conn net.Conn, ok func(res []byte) bool, req ...[]byte) ([]byt
+ 			}
+ 		}
+ 		if t != nil {
+-			t.Reset(time.Second)
++			t.Reset(retry)
+ 		}
+ 	})
+ 	defer t.Stop()
 diff --git a/pkg/xiaomi/cloud.go b/pkg/xiaomi/cloud.go
 index 0dcfd24..35b3a5e 100644
 --- a/pkg/xiaomi/cloud.go
@@ -843,10 +965,23 @@ index 0000000..c6f8b40
 + if ok,_,codes:=inspectSpeakerBody([]byte{0,0,0,0});!ok||codes["status"]!=0{t.Fatal("observed zero status rejected")}
 +}
 diff --git a/pkg/xiaomi/miss/client.go b/pkg/xiaomi/miss/client.go
-index 3113632..3e2ec2a 100644
+index 3113632..846978d 100644
 --- a/pkg/xiaomi/miss/client.go
 +++ b/pkg/xiaomi/miss/client.go
-@@ -79,6 +79,7 @@ type Client struct {
+@@ -57,7 +57,11 @@ func NewClient(rawURL string) (*Client, error) {
+ 	case "cs2":
+ 		conn, err = cs2.Dial(u.Host, query.Get("transport"))
+ 	case "tutk":
+-		conn, err = tutk.Dial(u.Host, query.Get("uid"), "Miss", "client")
++		if ip := net.ParseIP(u.Hostname()); model == ModelLoockV2 && ip != nil && ip.IsPrivate() {
++			conn, err = tutk.DialWithLANRetry(u.Host, query.Get("uid"), "Miss", "client", 300*time.Millisecond)
++		} else {
++			conn, err = tutk.Dial(u.Host, query.Get("uid"), "Miss", "client")
++		}
+ 	default:
+ 		err = fmt.Errorf("miss: unsupported vendor %s", s)
+ 	}
+@@ -79,6 +83,7 @@ type Client struct {
  	Conn
  	key   []byte
  	model string
@@ -854,7 +989,7 @@ index 3113632..3e2ec2a 100644
  }
  
  const (
-@@ -266,8 +267,11 @@ func (c *Client) WriteAudio(codecID uint32, payload []byte) error {
+@@ -266,8 +271,11 @@ func (c *Client) WriteAudio(codecID uint32, payload []byte) error {
  	header := make([]byte, hdrSize)
  	binary.LittleEndian.PutUint32(header, n)
  	binary.LittleEndian.PutUint32(header[4:], codecID)
