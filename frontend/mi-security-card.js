@@ -1,13 +1,13 @@
 /* HA authenticated, on-demand two-camera overview. No background preloading. */
 class MiSecurityCard extends HTMLElement {
   constructor() {
-    super(); this.attachShadow({mode:'open'}); this.sequence = 0; this.active = new Set();
+    super(); this.attachShadow({mode:'open'}); this.sequence = 0; this.active = new Set(); this.ptzBusy = new Set();
     this.onVisibility = () => { if (document.hidden) this.stop(); };
     this.onKey = e => { if(e.key === 'Escape') this.collapse(); };
   }
   setConfig(config) {
     if (!Array.isArray(config.cameras) || config.cameras.length !== 2 || config.cameras.some(c => !/^\d{1,24}$/.test(c.device) || !['dining','balcony'].includes(c.scene))) throw Error('Configure two supported cameras');
-    this.stop(); this.config = structuredClone(config); if(this.isConnected) this.render();
+    this.stop(); this.cameraStates={}; this.config = structuredClone(config); if(this.isConnected) this.render();
   }
   set hass(value) { this._hass = value; if(this.isConnected&&!this.stateTimer){this.refreshStates();this.stateTimer=setInterval(()=>{if(!document.hidden&&this.visible!==false)this.refreshStates();},60000);} }
   getCardSize() { return 3; }
@@ -55,17 +55,21 @@ class MiSecurityCard extends HTMLElement {
       .camera-mark{position:absolute;top:7px;right:8px;width:20px;height:20px;color:var(--secondary-text-color,#87909b);opacity:.65;pointer-events:none}.camera-mark svg{display:block;width:100%;height:100%}.expanded .camera-mark{display:none}
       :host([variant=classic]) .tile.expanded .label,:host([variant=arc]) .tile.expanded .label{background:transparent;padding:4px 0;border-radius:0}
       .expanded .label{top:7px;left:12px}.expanded .scene{overflow:hidden}
+      .ptz{position:absolute;left:10px;bottom:66px;z-index:4;display:grid;grid-template-columns:repeat(3,31px);grid-template-rows:repeat(2,31px);gap:3px}
+      .ptz button{border-radius:50%;background:#65707a65;color:#fff;font-size:16px;padding:0}.ptz button:active{background:#8c929ba0}.ptz button:disabled{opacity:.48}
+      .ptz [data-direction=up]{grid-column:2}.ptz [data-direction=left]{grid-row:2;grid-column:1}.ptz [data-direction=down]{grid-row:2;grid-column:2}.ptz [data-direction=right]{grid-row:2;grid-column:3}
       </style><ha-card><header><h2><span class="header-icon"><ha-icon icon="mdi:cctv"></ha-icon></span>安防</h2><div class="header-actions"><button class="play" aria-label="播放两个摄像机" title="播放两个摄像机"><ha-icon icon="mdi:play"></ha-icon></button></div></header><div class="grid"></div></ha-card><button class="backdrop" aria-label="关闭摄像机画面" hidden></button>`;
     this.setAttribute('variant',this.config.variant === 'arc'?'arc':'classic');
     this.config.cameras.forEach((camera,index) => {
       const tile=document.createElement('section');tile.className='tile';tile.dataset.scene=camera.scene;
-      tile.innerHTML=`<div class="scene">${this.scene(camera.scene)}</div><div class="stream"></div><span class="camera-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v3H4zM5 10h14a7 7 0 0 1-14 0Z" fill="currentColor"/><circle cx="12" cy="13" r="2.5" fill="var(--card-background-color,#fff)"/><circle cx="12" cy="13" r="1.1" fill="currentColor"/></svg></span><div class="label"></div><button class="open"></button><span class="status" role="status"></span><div class="popup-tools"><button class="privacy" role="switch" aria-checked="false" disabled><ha-icon icon="mdi:camera-off-outline"></ha-icon><span>读取隐私状态…</span></button><button class="recordings"><ha-icon icon="mdi:filmstrip"></ha-icon>查看录像</button></div><button class="close" hidden aria-label="关闭画面">✕</button>`;
+      tile.innerHTML=`<div class="scene">${this.scene(camera.scene)}</div><div class="stream"></div><span class="camera-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v3H4zM5 10h14a7 7 0 0 1-14 0Z" fill="currentColor"/><circle cx="12" cy="13" r="2.5" fill="var(--card-background-color,#fff)"/><circle cx="12" cy="13" r="1.1" fill="currentColor"/></svg></span><div class="label"></div><button class="open"></button><span class="status" role="status"></span><div class="ptz" role="group" aria-label="云台方向" hidden><button type="button" data-direction="up" aria-label="向上">↑</button><button type="button" data-direction="left" aria-label="向左">←</button><button type="button" data-direction="down" aria-label="向下">↓</button><button type="button" data-direction="right" aria-label="向右">→</button></div><div class="popup-tools"><button class="privacy" role="switch" aria-checked="false" disabled><ha-icon icon="mdi:camera-off-outline"></ha-icon><span>读取隐私状态…</span></button><button class="recordings"><ha-icon icon="mdi:filmstrip"></ha-icon>查看录像</button></div><button class="close" hidden aria-label="关闭画面">✕</button>`;
       tile.querySelector('.label').textContent=camera.name;
       tile.querySelector('.open').ariaLabel='查看'+camera.name;
       tile.querySelector('.open').onclick=()=>this.expand(index);
       tile.querySelector('.close').onclick=()=>this.collapse();
       tile.querySelector('.recordings').onclick=()=>this.recordings(index);
       tile.querySelector('.privacy').onclick=()=>this.togglePrivacy(index);
+      tile.querySelectorAll('.ptz button').forEach(button=>button.onclick=()=>this.moveCamera(index,button.dataset.direction));
       this.shadowRoot.querySelector('.grid').append(tile);
     });
     this.shadowRoot.querySelector('.play').onclick=()=>this.active.size?this.stop():this.play([0,1]);
@@ -80,6 +84,30 @@ class MiSecurityCard extends HTMLElement {
     tile.classList.toggle('is-private',state.enabled===false);const mark=tile.querySelector('.camera-mark');mark.classList.toggle('online',state.online===true);mark.classList.toggle('privacy-on',state.enabled===false);
     mark.title=state.online===false?'摄像机离线':state.online===true?(state.enabled===false?'摄像机在线 · 隐私模式':'摄像机在线'):'摄像机状态未知';
     const button=tile.querySelector('.privacy');button.disabled=!!this.privacyBusy||!!this.preparing||state.enabled===null;button.setAttribute('aria-checked',String(state.enabled===false));button.querySelector('span').textContent=(state.physical_privacy?'物理遮蔽':'隐私模式')+'：'+(state.enabled===null?'未知':state.enabled?'关':'开');
+    this.updatePTZ(index);
+  }
+  updatePTZ(index) {
+    const tile=this.tiles()[index], group=tile?.querySelector('.ptz');
+    if(!group)return;
+    const state=this.cameraStates?.[index];
+    group.hidden=this.expanded!==index||!this.active.has(index)||tile.dataset.playing!=='yes'||state?.online!==true||state.enabled!==true;
+    group.querySelectorAll('button').forEach(button=>button.disabled=!!this.privacyBusy||this.ptzBusy.has(this.config.cameras[index].device));
+  }
+  async moveCamera(index,direction) {
+    const tile=this.tiles()[index],group=tile?.querySelector('.ptz'),device=this.config.cameras[index].device;
+    if(!group||group.hidden||this.privacyBusy||this.ptzBusy.has(device))return;
+    const status=tile.querySelector('.status');
+    this.ptzBusy.add(device);this.updatePTZ(index);
+    status.textContent='正在发送云台指令…';
+    try {
+      await this._hass.callWS({type:'mi_cateye/camera_move',device,direction});
+      if(this.expanded===index&&this.tiles()[index]===tile)status.textContent='指令已发送';
+    } catch(error) {
+      if(this.expanded===index&&this.tiles()[index]===tile)status.textContent=error?.message||'请查看画面确认是否转动';
+    } finally {
+      // Cover the backend cooldown even when the cloud responds quickly.
+      setTimeout(()=>{this.ptzBusy.delete(device);this.tiles().forEach((_,i)=>this.updatePTZ(i));},400);
+    }
   }
   async refreshStates(){
     if(!this._hass||this.refreshing)return;this.refreshing=true;try{await Promise.all(this.config.cameras.map(async(_,i)=>{try{await this.readState(i);}catch(e){this.applyState(i,{online:null,enabled:null});}}));}finally{this.refreshing=false;}
@@ -89,10 +117,10 @@ class MiSecurityCard extends HTMLElement {
     if(state.enabled!==enabled)throw Error('摄像机状态尚未恢复');status.textContent='';return state;
   }
   async togglePrivacy(index){
-    const tile=this.tiles()[index],button=tile.querySelector('.privacy');if(button.disabled||this.privacyBusy)return;this.privacyBusy=true;button.disabled=true;tile.querySelector('.status').textContent='正在读取状态…';
+    const tile=this.tiles()[index],button=tile.querySelector('.privacy');if(button.disabled||this.privacyBusy)return;this.privacyBusy=true;this.updatePTZ(index);button.disabled=true;tile.querySelector('.status').textContent='正在读取状态…';
     try{const state=await this.readState(index,true);if(state.enabled===null)throw Error('unknown');const enabled=!state.enabled,name=this.config.cameras[index].name;
       if(!window.confirm(enabled?'是否唤醒'+name+'并播放？':'是否让'+name+'进入隐私模式并停止画面？')){tile.querySelector('.status').textContent='';return;}
-      this.sequence++;this.active.delete(index);tile.querySelector('.stream').replaceChildren();this.updateButton();await this.setEnabled(index,enabled);if(enabled&&this.expanded===index)await this.play([index]);
+      this.sequence++;this.active.delete(index);tile.querySelector('.stream').replaceChildren();delete tile.dataset.playing;this.updatePTZ(index);this.updateButton();await this.setEnabled(index,enabled);if(enabled&&this.expanded===index)await this.play([index]);
     }catch(e){tile.querySelector('.status').textContent='隐私模式设置失败，请核对米家状态';}finally{this.privacyBusy=false;for(const [i,state] of Object.entries(this.cameraStates||{}))this.applyState(Number(i),state);}
   }
   tiles() { return [...this.shadowRoot.querySelectorAll('.tile')]; }
@@ -110,7 +138,7 @@ class MiSecurityCard extends HTMLElement {
         const signed=await this._hass.callWS({type:'auth/sign_path',path,expires:300});
         if(seq!==this.sequence||!this.isConnected||!this.active.has(index))return;
         const frame=document.createElement('iframe');frame.title=this.config.cameras[index].name+'实时画面';frame.allow='autoplay';frame.src=signed.path;
-        frame.onload=()=>{if(seq===this.sequence){tile.querySelector('.status').textContent='';const video=frame.contentDocument?.querySelector('video');if(video){const resize=()=>{if(video.videoWidth&&video.videoHeight)tile.style.setProperty('--video-ratio',String(video.videoWidth/video.videoHeight));};resize();video.addEventListener('loadedmetadata',resize,{once:true});}}};
+        frame.onload=()=>{if(seq===this.sequence){tile.querySelector('.status').textContent='';const video=frame.contentDocument?.querySelector('video');if(video){const resize=()=>{if(video.videoWidth&&video.videoHeight)tile.style.setProperty('--video-ratio',String(video.videoWidth/video.videoHeight));};resize();video.addEventListener('loadedmetadata',resize,{once:true});const playing=()=>{if(seq===this.sequence&&frame.isConnected){tile.dataset.playing=!video.paused&&!video.ended&&!video.error&&video.readyState>=2?'yes':'';this.updatePTZ(index);}};for(const event of ['playing','pause','ended','error'])video.addEventListener(event,playing);playing();}}};
         tile.querySelector('.stream').replaceChildren(frame);
       }catch(error){if(seq===this.sequence){this.active.delete(index);tile.querySelector('.status').textContent='连接失败，请重试';this.updateButton();}}
     }));
@@ -123,20 +151,21 @@ class MiSecurityCard extends HTMLElement {
     this.sequence++;this.active.clear();
     this.shadowRoot.querySelectorAll('iframe').forEach(f=>{f.removeAttribute('src');f.remove();});
     this.shadowRoot.querySelectorAll('.status').forEach(s=>s.textContent='');
+    this.tiles().forEach((tile,index)=>{delete tile.dataset.playing;this.updatePTZ(index);});
     this.updateButton();
   }
   expand(index) {
     this.collapse();this.overviewWasPlaying=this.active.size>0;this.expanded=index;
     const tile=this.tiles()[index];tile.classList.add('expanded');tile.setAttribute('role','dialog');tile.setAttribute('aria-modal','true');tile.setAttribute('aria-label',this.config.cameras[index].name);
     tile.querySelector('.close').hidden=false;this.shadowRoot.querySelector('.backdrop').hidden=false;
-    this.play([index]);tile.querySelector('.close').focus();
+    this.updatePTZ(index);this.play([index]);tile.querySelector('.close').focus();
   }
   collapse() {
     if(this.expanded===undefined)return;
     const index=this.expanded;this.expanded=undefined;
     this.tiles().forEach(t=>{t.classList.remove('expanded');t.removeAttribute('role');t.removeAttribute('aria-modal');t.querySelector('.close').hidden=true;});
     this.shadowRoot.querySelector('.backdrop').hidden=true;
-    if(!this.overviewWasPlaying)this.stop();
+    this.updatePTZ(index);if(!this.overviewWasPlaying)this.stop();
     this.tiles()[index]?.querySelector('.open').focus();
   }
   recordings(index) {

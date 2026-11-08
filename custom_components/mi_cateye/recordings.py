@@ -120,8 +120,9 @@ async def ws_recordings_prepare(hass, connection, message):
 
 
 def register_recording_commands(hass):
-    from .camera_control import ws_camera_state
+    from .camera_control import ws_camera_move, ws_camera_state
     websocket_api.async_register_command(hass, ws_camera_state)
+    websocket_api.async_register_command(hass, ws_camera_move)
     websocket_api.async_register_command(hass, ws_recordings_devices)
     websocket_api.async_register_command(hass, ws_recordings_list)
     websocket_api.async_register_command(hass, ws_recordings_prepare)

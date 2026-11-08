@@ -106,6 +106,9 @@ def main():
             shutil.copyfile(goroot / name, licenses / ("GOLANG-" + name + ".txt"))
     (licenses / "GO-MODULES.json").write_text(json.dumps(inventory, indent=2), encoding="utf-8")
     shutil.copyfile(ROOT / "docs/mi-cateye-alpha-install.md", staging / "INSTALL.md")
+    (staging / "frontend").mkdir()
+    shutil.copyfile(ROOT / "frontend/mi-security-card.js", staging / "frontend/mi-security-card.js")
+    shutil.copyfile(ROOT / "docs/security-card.md", staging / "frontend/SECURITY-CARD.md")
     outputs = ROOT / "outputs"
     outputs.mkdir(exist_ok=True)
     archive = outputs / ("Mi-CatEye-" + version + ".zip")

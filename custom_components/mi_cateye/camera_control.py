@@ -82,3 +82,31 @@ async def ws_camera_state(hass, connection, message):
         connection.send_result(message["id"], value)
     except (ValueError, aiohttp.ClientError, TimeoutError):
         connection.send_error(message["id"], "camera_status_unavailable", "暂时无法读取或设置摄像机状态，请稍后重试")
+
+
+@websocket_api.websocket_command({vol.Required("type"): "mi_cateye/camera_move",
+                                 vol.Required("device"): str,
+                                 vol.Required("direction"): vol.In(("left", "right", "up", "down"))})
+@websocket_api.async_response
+async def ws_camera_move(hass, connection, message):
+    runtime = runtime_for(hass)
+    device = message["device"]
+    if runtime.cameras.get(device, {}).get("model") not in MODELS:
+        connection.send_error(message["id"], "camera_not_selected", "未配置此摄像机")
+        return
+    try:
+        await runtime.ensure_video()
+        async with runtime.client.post(
+            runtime.media.base_url + "/api/doorbell/camera-move",
+            params={"device": device}, json={"direction": message["direction"]},
+            timeout=aiohttp.ClientTimeout(total=48),
+        ) as response:
+            if response.status in (409, 429):
+                connection.send_error(message["id"], "camera_move_unavailable", "请确认画面仍在播放，稍等再操作")
+                return
+            response.raise_for_status()
+            if (await response.json()).get("sent") is not True:
+                raise ValueError("camera_move_unconfirmed")
+        connection.send_result(message["id"], {"sent": True})
+    except (ValueError, aiohttp.ClientError, TimeoutError):
+        connection.send_error(message["id"], "camera_move_unconfirmed", "无法确认指令是否送达，请先查看画面")

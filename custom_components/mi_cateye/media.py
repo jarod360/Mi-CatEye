@@ -102,7 +102,7 @@ class MediaRuntime:
                     "/api", "/api/streams", "/api/xiaomi", "/api/ws", "/api/stream.mp4",
                     "/api/frame.mp4", "/api/stream.mjpeg",
                     "/api/doorbell/recordings", "/api/doorbell/recordings/prepare", "/api/doorbell/recordings/clip",
-                    "/api/doorbell/talk", "/api/doorbell/camera-state",
+                    "/api/doorbell/talk", "/api/doorbell/camera-state", "/api/doorbell/camera-move",
                 ]},
                 "rtsp": {"listen": f"127.0.0.1:{self.rtsp_port}"},
                 "log": {"level": "error"},

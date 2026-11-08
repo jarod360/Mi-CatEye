@@ -41,21 +41,132 @@ index 0000000..0f781c2
 + s.producers=append(s.producers,&Producer{conn:original,state:stateStart})
 + if _,e:=s.ActiveProducer();e==nil{t.Fatal("ambiguous sources accepted")}
 +}
+diff --git a/internal/xiaomi/camera_move_lan.go b/internal/xiaomi/camera_move_lan.go
+new file mode 100644
+index 0000000..d1377e4
+--- /dev/null
++++ b/internal/xiaomi/camera_move_lan.go
+@@ -0,0 +1,101 @@
++package xiaomi
++
++import (
++	"bytes"
++	"context"
++	"crypto/aes"
++	"crypto/cipher"
++	"crypto/md5"
++	"encoding/binary"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"net"
++	"time"
++)
++
++// localCameraMove sends exactly one authenticated miIO motor command. A missing
++// acknowledgement is ambiguous and must never cause a second move.
++func localCameraMove(ctx context.Context, host string, token []byte, operation int) error {
++	ip := net.ParseIP(host)
++	if ip == nil || ip.To4() == nil || !ip.IsPrivate() || len(token) != 16 {
++		return errors.New("camera_lan_unavailable")
++	}
++	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: ip, Port: 54321})
++	if err != nil {
++		return err
++	}
++	defer conn.Close()
++	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
++	defer stop()
++	if err = conn.SetDeadline(time.Now().Add(2500 * time.Millisecond)); err != nil {
++		return err
++	}
++	hello := bytes.Repeat([]byte{255}, 32)
++	copy(hello, []byte{0x21, 0x31, 0, 32})
++	if _, err = conn.Write(hello); err != nil {
++		return err
++	}
++	buf := make([]byte, 4096)
++	n, err := conn.Read(buf)
++	if err != nil || n != 32 || buf[0] != 0x21 || buf[1] != 0x31 {
++		return errors.New("camera_lan_hello_failed")
++	}
++	id := int(time.Now().UnixMilli() % 1000000)
++	body := []byte(fmt.Sprintf(`{"id":%d,"method":"set_motor","params":{"operation":%d}}`, id, operation))
++	padding := aes.BlockSize - len(body)%aes.BlockSize
++	body = append(body, bytes.Repeat([]byte{byte(padding)}, padding)...)
++	key := md5.Sum(token)
++	iv := md5.Sum(append(key[:], token...))
++	block, _ := aes.NewCipher(key[:])
++	cipher.NewCBCEncrypter(block, iv[:]).CryptBlocks(body, body)
++	packet := make([]byte, 32+len(body))
++	copy(packet[:16], buf[:16])
++	binary.BigEndian.PutUint32(packet[4:8], 0)
++	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
++	copy(packet[16:32], token)
++	copy(packet[32:], body)
++	checksum := md5.Sum(packet)
++	copy(packet[16:32], checksum[:])
++	if err = ctx.Err(); err != nil {
++		return err
++	}
++	if err = conn.SetDeadline(time.Now().Add(2500 * time.Millisecond)); err != nil {
++		return err
++	}
++	if _, err = conn.Write(packet); err != nil {
++		return err
++	}
++	for {
++		n, err = conn.Read(buf)
++		if err != nil {
++			return err
++		}
++		if n <= 32 || (n-32)%aes.BlockSize != 0 || buf[0] != 0x21 || buf[1] != 0x31 {
++			continue
++		}
++		signature := [16]byte(buf[16:32])
++		copy(buf[16:32], token)
++		if signature != md5.Sum(buf[:n]) {
++			continue
++		}
++		payload := buf[32:n]
++		cipher.NewCBCDecrypter(block, iv[:]).CryptBlocks(payload, payload)
++		pad := int(payload[len(payload)-1])
++		if pad < 1 || pad > aes.BlockSize || !bytes.Equal(payload[len(payload)-pad:], bytes.Repeat([]byte{byte(pad)}, pad)) {
++			continue
++		}
++		var reply struct {
++			ID     int
++			Result json.RawMessage
++			Error  json.RawMessage
++		}
++		if json.Unmarshal(bytes.TrimRight(payload[:len(payload)-pad], "\x00"), &reply) != nil || reply.ID != id {
++			continue
++		}
++		if len(reply.Result) == 0 || (len(reply.Error) != 0 && string(reply.Error) != "null") {
++			return errors.New("camera_lan_move_rejected")
++		}
++		return nil
++	}
++}
 diff --git a/internal/xiaomi/camera_state.go b/internal/xiaomi/camera_state.go
 new file mode 100644
-index 0000000..7f66fb9
+index 0000000..ec38847
 --- /dev/null
 +++ b/internal/xiaomi/camera_state.go
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,133 @@
 +// Fixed selected-camera status and explicit privacy control; no video session.
 +package xiaomi
 +
 +import (
 + "encoding/json"
 + "errors"
++ "encoding/hex"
 + "net/http"
 + "net/url"
 + "sync"
++ "time"
++
++ "github.com/AlexxIT/go2rtc/internal/streams"
 +)
 +
 +type cameraState struct { Online *bool `json:"online"`; Enabled *bool `json:"enabled"` }
@@ -63,18 +174,24 @@ index 0000000..7f66fb9
 +var cameraControlLocks sync.Map
 +
 +func readCameraState(source *url.URL)(cameraState,error){
++ state, _, err := readCameraDetails(source)
++ return state, err
++}
++
++func readCameraDetails(source *url.URL)(cameraState,[]byte,error){
 + result:=cameraState{};did:=source.Query().Get("did")
 + params,_:=json.Marshal(map[string]any{"dids":[]string{did},"limit":20})
-+ raw,e:=cameraCloudRequest(source.User,"/v2/home/device_list_page",string(params));if e!=nil{return result,errors.New("camera_status_failed")}
-+ var devices struct{List []struct{Did string `json:"did"`;Online *bool `json:"isOnline"`} `json:"list"`}
-+ if json.Unmarshal(raw,&devices)!=nil{return result,errors.New("camera_status_failed")}
-+ for _,device:=range devices.List{if device.Did==did{result.Online=device.Online}}
++ raw,e:=cameraCloudRequest(source.User,"/v2/home/device_list_page",string(params));if e!=nil{return result,nil,errors.New("camera_status_failed")}
++ var devices struct{List []struct{Did string `json:"did"`;Online *bool `json:"isOnline"`;Token string `json:"token"`} `json:"list"`}
++ if json.Unmarshal(raw,&devices)!=nil{return result,nil,errors.New("camera_status_failed")}
++ var token []byte
++ for _,device:=range devices.List{if device.Did==did{result.Online=device.Online;token,_=hex.DecodeString(device.Token);break}}
 + params,_=json.Marshal(map[string]any{"datasource":1,"params":[]map[string]any{{"did":did,"siid":2,"piid":1}}})
-+ raw,e=cameraCloudRequest(source.User,"/miotspec/prop/get",string(params));if e!=nil{return result,nil}
++ raw,e=cameraCloudRequest(source.User,"/miotspec/prop/get",string(params));if e!=nil{return result,token,nil}
 + var props []struct{Did string `json:"did"`;Siid int `json:"siid"`;Piid int `json:"piid"`;Code int `json:"code"`;Value *bool `json:"value"`}
-+ if json.Unmarshal(raw,&props)!=nil{return result,nil}
++ if json.Unmarshal(raw,&props)!=nil{return result,token,nil}
 + for _,p:=range props{if p.Did==did&&p.Siid==2&&p.Piid==1&&p.Code==0{result.Enabled=p.Value}}
-+ return result,nil
++ return result,token,nil
 +}
 +
 +func writeCameraEnabled(source *url.URL,enabled bool)error{
@@ -96,6 +213,79 @@ index 0000000..7f66fb9
 +  if e=writeCameraEnabled(source,*body.Enabled);e!=nil{jsonReply(w,502,map[string]string{"error":"camera_control_failed"});return}
 + }
 + state,e:=readCameraState(source);if e!=nil{jsonReply(w,502,map[string]string{"error":"camera_status_failed"});return};jsonReply(w,200,state)
++}
++
++var cameraLastMove sync.Map
++
++func (s *recordingStore) cameraMove(w http.ResponseWriter, r *http.Request) {
++ if r.Method != http.MethodPost {
++  w.WriteHeader(http.StatusMethodNotAllowed)
++  return
++ }
++ var body struct { Direction string `json:"direction"` }
++ decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 96))
++ decoder.DisallowUnknownFields()
++ if decoder.Decode(&body) != nil {
++  jsonReply(w, 400, map[string]string{"error": "invalid_direction"})
++  return
++ }
++ operation, ok := map[string]int{"left": 1, "right": 2, "up": 3, "down": 4}[body.Direction]
++ if !ok {
++  jsonReply(w, 400, map[string]string{"error": "invalid_direction"})
++  return
++ }
++ device := r.URL.Query().Get("device")
++ source, err := selectedSDSource(device)
++ if err != nil || !cameraMoveModel(source.Query().Get("model")) {
++  jsonReply(w, 400, map[string]string{"error": "camera_not_selected"})
++  return
++ }
++ item, _ := cameraControlLocks.LoadOrStore(device, &sync.Mutex{})
++ lock := item.(*sync.Mutex)
++ if !lock.TryLock() {
++  jsonReply(w, 409, map[string]string{"error": "camera_control_busy"})
++  return
++ }
++ defer lock.Unlock()
++ if last, ok := cameraLastMove.Load(device); ok && time.Since(last.(time.Time)) < 400*time.Millisecond {
++  jsonReply(w, 429, map[string]string{"error": "camera_move_rate"})
++  return
++ }
++ stream := streams.Get("camera_"+device)
++ if stream == nil {
++  jsonReply(w, 409, map[string]string{"error": "camera_not_playing"})
++  return
++ }
++ if _, err = stream.ActiveProducer(); err != nil {
++  jsonReply(w, 409, map[string]string{"error": "camera_not_playing"})
++  return
++ }
++ state, token, err := readCameraDetails(source)
++ if err != nil || state.Online == nil || !*state.Online || state.Enabled == nil || !*state.Enabled {
++  jsonReply(w, 409, map[string]string{"error": "camera_unavailable"})
++  return
++ }
++ if _, err = stream.ActiveProducer(); err != nil || r.Context().Err() != nil {
++  jsonReply(w, 409, map[string]string{"error": "camera_not_playing"})
++  return
++ }
++ if len(token) != 16 {
++  jsonReply(w, 409, map[string]string{"error": "camera_lan_token_unavailable"})
++  return
++ }
++ if source.Query().Get("model") == "chuangmi.camera.ipc021" {
++  operation = ((operation - 1) ^ 1) + 1
++ }
++ cameraLastMove.Store(device, time.Now())
++ if err = localCameraMove(r.Context(), source.Hostname(), token, operation); err != nil {
++  jsonReply(w, 502, map[string]string{"error": "camera_move_unconfirmed"})
++  return
++ }
++ jsonReply(w, 200, map[string]bool{"sent": true})
++}
++
++func cameraMoveModel(model string) bool {
++ return model == "chuangmi.camera.ipc009" || model == "chuangmi.camera.ipc021"
 +}
 diff --git a/internal/xiaomi/camera_state_test.go b/internal/xiaomi/camera_state_test.go
 new file mode 100644
@@ -1003,7 +1193,7 @@ index 3113632..846978d 100644
  
  type Packet struct {
 diff --git a/pkg/xiaomi/miss/cs2/conn.go b/pkg/xiaomi/miss/cs2/conn.go
-index 2c1b395..1bd3ab4 100644
+index 2c1b395..46737a6 100644
 --- a/pkg/xiaomi/miss/cs2/conn.go
 +++ b/pkg/xiaomi/miss/cs2/conn.go
 @@ -24,7 +24,7 @@ func Dial(host, transport string) (*Conn, error) {
@@ -1041,7 +1231,29 @@ index 2c1b395..1bd3ab4 100644
  			channel := c.channels[ch]
  
  			if c.isTCP {
-@@ -265,7 +266,7 @@ func (c *Conn) WritePacket(hdr, payload []byte) error {
+@@ -193,13 +194,15 @@ func (c *Conn) Error() error {
+ }
+ 
+ func (c *Conn) ReadCommand() (cmd uint32, data []byte, err error) {
+-	buf, ok := c.channels[0].Pop()
+-	if !ok {
+-		return 0, nil, c.Error()
++	for {
++		buf, ok := c.channels[0].Pop()
++		if !ok {
++			return 0, nil, c.Error()
++		}
++		if len(buf) >= 4 {
++			return binary.LittleEndian.Uint32(buf), buf[4:], nil
++		}
+ 	}
+-	cmd = binary.LittleEndian.Uint32(buf)
+-	data = buf[4:]
+-	return
+ }
+ 
+ func (c *Conn) WriteCommand(cmd uint32, data []byte) error {
+@@ -265,7 +268,7 @@ func (c *Conn) WritePacket(hdr, payload []byte) error {
  	c.seqCh3++
  	binary.BigEndian.PutUint32(req[8:], n)
  	copy(req[offset:], hdr)
@@ -1050,7 +1262,7 @@ index 2c1b395..1bd3ab4 100644
  
  	_, err := c.Conn.Write(req)
  	return err
-@@ -430,12 +431,14 @@ type dataChannel struct {
+@@ -430,12 +433,14 @@ type dataChannel struct {
  }
  
  func (c *dataChannel) Push(b []byte) error {
@@ -1132,7 +1344,7 @@ index 0000000..c468207
 + }
 +}
 diff --git a/pkg/xiaomi/miss/producer.go b/pkg/xiaomi/miss/producer.go
-index dcea284..2a8ad4a 100644
+index dcea284..f993a8e 100644
 --- a/pkg/xiaomi/miss/producer.go
 +++ b/pkg/xiaomi/miss/producer.go
 @@ -4,6 +4,7 @@ import (
@@ -1159,7 +1371,22 @@ index dcea284..2a8ad4a 100644
  }
  
  func Dial(rawURL string) (core.Producer, error) {
-@@ -184,17 +194,21 @@ func (p *Producer) Start() error {
+@@ -128,6 +138,14 @@ func probe(client *Client, audio bool) ([]*core.Media, error) {
+ const timestamp40ms = 48000 * 0.040
+ 
+ func (p *Producer) Start() error {
++	// The balcony camera sends unsolicited CS2 control messages during PTZ.
++	// Drain them for the life of the producer so a full queue cannot stop video.
++	if p.client.model == "chuangmi.camera.ipc021" {
++		switch p.client.Protocol() {
++		case "cs2+udp", "cs2+tcp":
++			p.controlOnce.Do(func() { go p.readControls() })
++		}
++	}
+ 	var audioTS uint32
+ 
+ 	for {
+@@ -184,17 +202,21 @@ func (p *Producer) Start() error {
  			audioTS += timestamp40ms
  		}
  
@@ -1495,12 +1722,12 @@ index 0000000..5d8f8c5
 +}
 diff --git a/pkg/xiaomi/miss/talk_session_test.go b/pkg/xiaomi/miss/talk_session_test.go
 new file mode 100644
-index 0000000..3faf092
+index 0000000..dd48f76
 --- /dev/null
 +++ b/pkg/xiaomi/miss/talk_session_test.go
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,68 @@
 +package miss
-+import("context";"encoding/binary";"io";"sync";"testing";"time";"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto")
++import("context";"errors";"encoding/binary";"io";"sync";"testing";"time";"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto")
 +type talkTestWire struct{Conn;key []byte;commands chan []byte;mu sync.Mutex;starts,stops,frames int}
 +func(w *talkTestWire) ReadCommand()(uint32,[]byte,error){b,ok:=<-w.commands;if !ok{return 0,nil,io.EOF};return cmdEncoded,b,nil}
 +func(w *talkTestWire) WriteCommand(cmd uint32,b []byte)error{
@@ -1530,6 +1757,42 @@ index 0000000..3faf092
 + for{w.mu.Lock();stopped:=w.stops==1;w.mu.Unlock();if stopped{break};if time.Now().After(deadline){t.Fatal("cancel did not stop speaker")};time.Sleep(time.Millisecond)}
 + if s.WriteFrame(make([]byte,480))==nil{t.Fatal("cancelled audio accepted")}
 + next,e:=p.BeginTalk(context.Background());if e!=nil{t.Fatal("speaker not released",e)};next.Close()
++}
++
++type ptzControlWire struct {
++ Conn
++ controls chan struct{}
++ drained chan struct{}
++}
++
++func (w *ptzControlWire) Protocol() string { return "cs2+udp" }
++func (w *ptzControlWire) SetDeadline(time.Time) error { return nil }
++func (w *ptzControlWire) ReadCommand() (uint32, []byte, error) {
++ if _, ok := <-w.controls; !ok {
++  close(w.drained)
++  return 0, nil, io.EOF
++ }
++ return 0, nil, nil
++}
++func (w *ptzControlWire) ReadPacket() ([]byte, []byte, error) {
++ select {
++ case <-w.drained:
++  return nil, nil, io.EOF
++ case <-time.After(time.Second):
++  return nil, nil, context.DeadlineExceeded
++ }
++}
++
++func TestBalconyLiveDrainsUnsolicitedControls(t *testing.T) {
++ w := &ptzControlWire{controls: make(chan struct{}, 16), drained: make(chan struct{})}
++ for i := 0; i < cap(w.controls); i++ {
++  w.controls <- struct{}{}
++ }
++ close(w.controls)
++ p := &Producer{client: &Client{Conn: w, model: "chuangmi.camera.ipc021"}}
++ if err := p.Start(); !errors.Is(err, io.EOF) || len(w.controls) != 0 {
++  t.Fatalf("control queue did not drain during live playback: %v", err)
++ }
 +}
 diff --git a/pkg/xiaomi/request_error.go b/pkg/xiaomi/request_error.go
 new file mode 100644
